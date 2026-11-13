@@ -51,12 +51,40 @@
 #  define LOG_TAG "CORE"
 #endif
 
+// fw70 port: besides stderr, mirror log lines into /tmp/oem-aa-mod.log
+// (tmpfs, wiped on reboot) when the flag file
+// /data_persist/oem-aa-mod/debug exists. Hard-capped at 2 MB so it can
+// never fill /tmp; after the cap further lines are silently dropped.
+#include <unistd.h>
+#include <ctime>
+inline std::FILE *libpatch_logfile(void)
+{
+    static int state = 0;          // 0 = unchecked, 1 = open, 2 = disabled
+    static std::FILE *f = nullptr;
+    if (state == 0) {
+        state = 2;
+        if (access("/data_persist/oem-aa-mod/debug", F_OK) == 0) {
+            f = std::fopen("/tmp/oem-aa-mod.log", "a");
+            if (f) state = 1;
+        }
+    }
+    if (state != 1) return nullptr;
+    if (std::ftell(f) > 2L * 1024 * 1024) { state = 2; return nullptr; }
+    return f;
+}
+
 #define LOG_EMIT(tag, fmt, ...)                                                \
     do {                                                                       \
         std::fprintf(stderr,                                                   \
                      "[libpatch-" LIBPATCH_NAME "][" LOG_TAG "][" tag "] " fmt "\n", \
                      ##__VA_ARGS__);                                           \
         std::fflush(stderr);                                                   \
+        std::FILE *lf_ = libpatch_logfile();                                   \
+        if (lf_) {                                                             \
+            std::fprintf(lf_, "%ld [" LIBPATCH_NAME "][" LOG_TAG "][" tag "] " fmt "\n", \
+                         (long)time(nullptr), ##__VA_ARGS__);                  \
+            std::fflush(lf_);                                                  \
+        }                                                                      \
     } while (0)
 
 // Keep the format string type-checked even when the level is

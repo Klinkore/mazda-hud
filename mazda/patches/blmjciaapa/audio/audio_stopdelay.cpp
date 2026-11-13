@@ -141,6 +141,7 @@ static void *drain_helper(void *)
     }
 }
 
+#ifndef FW70_PORT  // fw70: interposer not exported (feature disabled on FW70)
 extern "C" PRELOAD_EXPORT
 int timer_settime(timer_t timerid, int flags,
                   const struct itimerspec *new_value, struct itimerspec *old_value)
@@ -207,6 +208,7 @@ int timer_settime(timer_t timerid, int flags,
     }
     return real(timerid, flags, new_value, old_value);
 }
+#endif  // FW70_PORT
 
 // Bring up the drain-done semaphore + persistent helper thread, once. Called from lifecycle.cpp's
 // session bracket after config load, so the gate is resolved up front (not on the first

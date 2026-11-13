@@ -33,6 +33,7 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <string.h>
 
 namespace {
@@ -64,6 +65,30 @@ void oem_self_gate(void)
         LOGW("self-gate: blmjciaapa.so not mapped — disabling shim");
         g_enabled = false;
         return;
+    }
+
+    // fw70 port: every OEM offset in this build was harvested from
+    // FW 70.00.100. Refuse to touch anything on any other firmware
+    // (e.g. after an OEM update) — stay a transparent pass-through.
+    {
+        bool fw_ok = false;
+        FILE *vf = fopen("/jci/version.ini", "r");
+        if (vf) {
+            char line[256];
+            while (fgets(line, sizeof(line), vf)) {
+                if (strncmp(line, "JCI_SW_VER=", 11) == 0 &&
+                    strstr(line, "_70.00.100") != nullptr) {
+                    fw_ok = true;
+                    break;
+                }
+            }
+            fclose(vf);
+        }
+        if (!fw_ok) {
+            LOGW("self-gate: firmware is not 70.00.100 — disabling shim");
+            g_enabled = false;
+            return;
+        }
     }
 
     g_enabled = true;

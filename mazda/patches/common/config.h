@@ -436,21 +436,25 @@ inline void load(const void *sym_in_self)
 
 // Accessors — valid any time; return the compiled-in defaults before
 // load() has run, the file's values after.
+// FW 70.00.100 port: only touch + HUD (vbs transport) are supported. Every
+// feature that depends on 74.00.324-only code offsets (svcnavi merge, GAL 1.6,
+// audio detours, BT pairing bypass, play/pause bridge) is hard-disabled below
+// regardless of libpatch.conf, so a stray config key can't enable them.
 inline bool         touch_enabled()  { return settings().touch; }
 inline bool         hud_enabled()    { return settings().hud; }
-inline HudTransport hud_transport()  { return settings().hud_transport; }
+inline HudTransport hud_transport()  { return HUD_TRANSPORT_VBS; }
 inline bool         force_street_name() { return settings().force_street_name; }
 inline bool         hud_fold_latin() { return settings().hud_fold_latin; }
 inline uint32_t     hud_maneuver_max_distance_m() { return settings().hud_maneuver_max_distance_m; }
-inline bool         use_protocol_v1_6() { return settings().use_protocol_v1_6; }
-inline bool         roundabout_prepend_exit_number() { return settings().roundabout_prepend_exit_number; }
-inline bool         aa_audio_low_latency() { return settings().aa_audio_low_latency; }
-inline bool         mute_pauses_phone() { return settings().mute_pauses_phone; }
-inline bool         unmute_starts_playback() { return settings().unmute_starts_playback; }
-inline bool         block_headunit_media_play() { return settings().block_headunit_media_play; }
-inline bool         bt_pairing_bypass_all_devices() { return settings().bt_pairing_bypass_all_devices; }
-inline bool         bt_pairing_show_device_notification() { return settings().bt_pairing_show_device_notification; }
-inline bool         compass_always_on() { return settings().compass_always_on; }
+inline bool         use_protocol_v1_6() { return false; }
+inline bool         roundabout_prepend_exit_number() { return false; }
+inline bool         aa_audio_low_latency() { return false; }
+inline bool         mute_pauses_phone() { return false; }
+inline bool         unmute_starts_playback() { return false; }
+inline bool         block_headunit_media_play() { return false; }
+inline bool         bt_pairing_bypass_all_devices() { return false; }
+inline bool         bt_pairing_show_device_notification() { return false; }
+inline bool         compass_always_on() { return false; }
 
 } // namespace libpatch_config
 

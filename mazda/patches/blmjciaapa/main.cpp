@@ -45,7 +45,7 @@ void on_load()
         return;
     }
 
-    LOGD("loading (target FW 74.00.324A NA, blmjciaapa.so touch shim) "
+    LOGD("loading (target FW 70.00.100A (fw70 port), blmjciaapa.so touch+HUD shim) "
          "pid=%d ppid=%d cmdline=[%s]",
          (int)getpid(), (int)getppid(), cmdline);
     preload_install_fatal_handler();

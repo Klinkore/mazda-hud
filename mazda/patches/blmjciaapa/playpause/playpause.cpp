@@ -620,6 +620,7 @@ void *watcher_main(void *)
 
 } // namespace
 
+#ifndef FW70_PORT  // fw70: interposer not exported (feature disabled on FW70)
 extern "C" PRELOAD_EXPORT
 char *SerialID_BufGet(char *serialized, char *serial_id,
                       uint32_t *serial_id_size, uint32_t *connect_mode,
@@ -648,7 +649,9 @@ char *SerialID_BufGet(char *serialized, char *serial_id,
     }
     return next;
 }
+#endif  // FW70_PORT
 
+#ifndef FW70_PORT  // fw70: interposer not exported (feature disabled on FW70)
 extern "C" PRELOAD_EXPORT
 int aap_send_key_input(void *handle, const void *event)
 {
@@ -665,6 +668,7 @@ int aap_send_key_input(void *handle, const void *event)
     }
     return g_real_send_key_input(handle, event);
 }
+#endif  // FW70_PORT
 
 void playpause_post_aap_create_session(void)
 {

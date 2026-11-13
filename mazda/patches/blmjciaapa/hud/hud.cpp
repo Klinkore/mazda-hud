@@ -578,7 +578,39 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         break;
     }
     case kTagNextTurn: {
-        const NextTurnHdr *t = static_cast<const NextTurnHdr *>(hdr36);
+        // FW 70.00.100: libaap_interface.so hands the callback the RAW
+        // 0x91c-byte IPC payload built by aap_service's
+        // NavCallbacks::navigationNextTurnCallback (no 36-byte pointer
+        // header like FW74). Layout (verified by disassembly of FW70
+        // aap_service @0x2e26c):
+        //   +0x000 u32  tag (0x501)
+        //   +0x004 char road[0x100]   (inline, length-capped, not NUL-guaranteed)
+        //   +0x104 u32  road_len      (<= 0x100)
+        //   +0x108 u32  turn_side
+        //   +0x10c u32  turn_event    (producer-compacted, same as FW74)
+        //   +0x110 u8   image[0x800]  (inline PNG, unused)
+        //   +0x910 u32  image_len
+        //   +0x914 i32  turn_angle
+        //   +0x918 i32  turn_number
+        // Re-pack it into the FW74 NextTurnHdr view so the rest of the
+        // HUD path stays untouched.
+        const uint8_t *raw = static_cast<const uint8_t *>(hdr36);
+        static char road70[0x101];
+        uint32_t road_len70 = *reinterpret_cast<const uint32_t *>(raw + 0x104);
+        if (road_len70 > 0x100) road_len70 = 0x100;
+        memcpy(road70, raw + 0x004, road_len70);
+        road70[road_len70] = '\0';
+        NextTurnHdr t70;
+        t70.tag           = kTagNextTurn;
+        t70.road_name     = road70;
+        t70.road_name_len = road_len70;
+        t70.turn_side     = *reinterpret_cast<const uint32_t *>(raw + 0x108);
+        t70.turn_event    = *reinterpret_cast<const uint32_t *>(raw + 0x10c);
+        t70.image         = nullptr;   // IMAGE_CODES_ONLY: ignore any PNG
+        t70.image_len     = 0;
+        t70.turn_angle    = *reinterpret_cast<const int32_t *>(raw + 0x914);
+        t70.turn_number   = *reinterpret_cast<const int32_t *>(raw + 0x918);
+        const NextTurnHdr *t = &t70;
         const uint32_t turn_event = decode_turn_event(t->turn_event);
         dump_next_turn(t, turn_event);
         if (!hud_distance_filter_enabled()) {

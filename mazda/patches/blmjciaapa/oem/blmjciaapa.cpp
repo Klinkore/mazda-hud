@@ -22,33 +22,33 @@ namespace {
 // with the cross-toolchain nm. Re-harvest after any OEM update.
 namespace off {
 //   GetServiceInterfaces (the only dynamically-exported symbol; anchor)
-constexpr uintptr_t GetServiceInterfaces          = 0x00061768;
+constexpr uintptr_t GetServiceInterfaces          = 0x0005c2ac;
 //   _ZN9SingletonI7AapProcE11GetInstanceEv
-constexpr uintptr_t Singleton_AapProc_GetInstance = 0x00062670;
+constexpr uintptr_t Singleton_AapProc_GetInstance = 0x0005d154;
 //   _ZN7AapProc15GetVideoManagerEv
-constexpr uintptr_t AapProc_GetVideoManager       = 0x0007f664;
+constexpr uintptr_t AapProc_GetVideoManager       = 0x000788e4;
 //   _ZN7AapProc10GetRaceAapEv
-constexpr uintptr_t AapProc_GetRaceAap            = 0x0007f614;
+constexpr uintptr_t AapProc_GetRaceAap            = 0x00078890;
 //   _ZN7AapProc15GetAudioManagerEv
-constexpr uintptr_t AapProc_GetAudioManager       = 0x0007f63c;
+constexpr uintptr_t AapProc_GetAudioManager       = 0x000788b8;
 //   _ZN7AapProc22GetAapConnectionManagerEv
-constexpr uintptr_t AapProc_GetAapConnectionManager = 0x000872fc;
+constexpr uintptr_t AapProc_GetAapConnectionManager = 0x0007ff54;
 //   _ZN12VideoManager16IsAAVideoInFocusEv
-constexpr uintptr_t VideoManager_IsAAVideoInFocus = 0x000b3af4;
+constexpr uintptr_t VideoManager_IsAAVideoInFocus = 0x000abd78;
 //   _ZN12AudioManager16IsAAMediaInFocusEv
-constexpr uintptr_t AudioManager_IsAAMediaInFocus = 0x000ac3b0;
+constexpr uintptr_t AudioManager_IsAAMediaInFocus = 0x000a4630;
 //   _ZN12AudioManager18IsAAMediaInPlayingEv
-constexpr uintptr_t AudioManager_IsAAMediaInPlaying = 0x000ac3f8;
+constexpr uintptr_t AudioManager_IsAAMediaInPlaying = 0x000a4678;
 //   _ZN7RaceAap14SendTouchInputEP14AAP_TouchEvent
-constexpr uintptr_t RaceAap_SendTouchInput        = 0x0008e3a8;
+constexpr uintptr_t RaceAap_SendTouchInput        = 0x00086ba4;
 //   _ZN7RaceAap12SendKeyInputEP12AAP_KeyEvent
-constexpr uintptr_t RaceAap_SendKeyInput          = 0x0008e534;
+constexpr uintptr_t RaceAap_SendKeyInput          = 0x00086d30;
 //   _ZN12AudioManager21SendReplyRequestFocusE14AAP_StreamType17AAP_StreamRequest
-constexpr uintptr_t AudioManager_SendReplyRequestFocus = 0x000a6f40;
+constexpr uintptr_t AudioManager_SendReplyRequestFocus = 0x0009efd0;
 //   _ZN20AapConnectionManager21NotifyBtPairingResultE12true_false_t
-constexpr uintptr_t AapConnectionManager_NotifyBtPairingResult = 0x0007c820;
+constexpr uintptr_t AapConnectionManager_NotifyBtPairingResult = 0x000766e4;
 //   _ZN20AapConnectionManager18ActivateAapSessionEv
-constexpr uintptr_t AapConnectionManager_ActivateAapSession    = 0x00078db4;
+constexpr uintptr_t AapConnectionManager_ActivateAapSession    = 0x0007325c;
 
 // AapConnectionManager instance layout (DATA field offsets, not
 // function offsets — no OEM getter exists for these). Both offsets are
