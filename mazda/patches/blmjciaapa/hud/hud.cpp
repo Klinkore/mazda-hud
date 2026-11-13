@@ -613,6 +613,19 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         t70.image_len     = 0;
         t70.turn_angle    = *reinterpret_cast<const int32_t *>(raw + 0x914);
         t70.turn_number   = *reinterpret_cast<const int32_t *>(raw + 0x918);
+        // Yandex (and some AA versions) send roundabouts with
+        // turn_angle = 0 and only an exit number, which the angle-indexed
+        // HUD roundabout glyphs render as the wrong exit. Derive a
+        // best-guess angle from the exit number: exit 1 ~ 90 deg (first
+        // right), 2 ~ 180 (straight), 3 ~ 270 (left), 4 ~ 360 (U-turn).
+        // Implausible exit numbers fall back to "straight through".
+        if (decode_turn_event(t70.turn_event) == NAV_TURN_EVENT_ROUNDABOUT_ENTER_AND_EXIT &&
+            t70.turn_angle == 0) {
+            const int32_t n = t70.turn_number;
+            t70.turn_angle = (n >= 1 && n <= 6) ? n * 90 : 180;
+            LOGD("nav 0x501: roundabout without angle — exit=%d -> guessed angle=%d",
+                 (int)n, (int)t70.turn_angle);
+        }
         const NextTurnHdr *t = &t70;
         const uint32_t turn_event = decode_turn_event(t->turn_event);
         dump_next_turn(t, turn_event);

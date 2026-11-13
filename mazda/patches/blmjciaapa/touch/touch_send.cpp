@@ -135,6 +135,14 @@ void send_event(const SnapEntry *entries, int n,
     }
     int rc = RaceAap_SendTouchInput(race, &evt);
     LOGV("send_event: SendTouchInput -> %d", rc);
+#ifdef FW70_PORT
+    if (action == kAAPTouchActionPointerDown || action == kAAPTouchActionPointerUp) {
+        LOGD("multitouch: action=%u n=%d idx=%d p0=(id%u %u,%u) p1=(id%u %u,%u) rc=%d",
+             static_cast<uint32_t>(action), n, action_index,
+             evt.pointer_id[0], evt.x[0], evt.y[0],
+             evt.pointer_id[1], evt.x[1], evt.y[1], rc);
+    }
+#endif
     if (rc != 0) {
         // 0x108 = AAP_SESSION_NOT_CONNECTED — expected briefly after
         //         create until the SDK reaches AAP_SESSION_STATE_CONNECTED

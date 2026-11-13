@@ -55,6 +55,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
+#include <time.h>
 
 namespace {
 
@@ -407,6 +408,36 @@ void *sender_main(void *)
     uint8_t      sync_bit = 0;
     uint32_t     last_processed = 0;
 
+#ifdef FW70_PORT
+    // fw70: a 1 s ticker wakes this loop so we can (a) re-send the current
+    // frame every 2 s — otherwise the OEM nav service's own (blank) HUD
+    // frames win whenever the phone's guidance doesn't change the shown
+    // value — and (b) blank the HUD after 8 s without any guidance from
+    // the phone (AA unplugged, nav app closed: no STOP ever arrives).
+    // A pthread ticker instead of condition_variable::wait_for, whose
+    // chrono symbols are missing from the unit's libstdc++ 6.0.14.
+    static std::atomic<uint32_t> s_tick{0};
+    pthread_t ticker;
+    bool ticker_up = pthread_create(&ticker, nullptr, [](void *) -> void * {
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            sleep(1);
+            s_tick.fetch_add(1, std::memory_order_acq_rel);
+            g_cv.notify_one();
+        }
+        return nullptr;
+    }, nullptr) == 0;
+    if (!ticker_up) LOGW("hud sender: ticker thread failed — no keepalive/timeout");
+    auto now_ms = []() -> long {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+    };
+    long     last_update_ms = now_ms();
+    long     last_send_ms   = last_update_ms;
+    uint32_t last_tick      = 0;
+    bool     blanked        = false;
+#endif
+
     while (!g_stop.load(std::memory_order_relaxed)) {
         // Seqlock read of g_snapshot. Standard pattern: snapshot
         // is consistent iff seq is even before AND after the
@@ -423,21 +454,67 @@ void *sender_main(void *)
         }
 
         if (s2 != last_processed) {
+#ifdef FW70_PORT
+            if (blanked) {
+                // Coming back after a timeout blank: force a full frame.
+                prev = NaviSnapshot();
+                blanked = false;
+            }
+#endif
+#ifdef FW70_PORT
+            const bool differs = std::memcmp(&snap, &prev, sizeof(snap)) != 0;
+#endif
             send_one(snap, prev, sync_bit);
             prev = snap;
             last_processed = s2;
+#ifdef FW70_PORT
+            last_update_ms = now_ms();
+            if (differs) last_send_ms = last_update_ms;
+#endif
         }
+#ifdef FW70_PORT
+        {
+            const bool showing = !blanked && (snap.dir_icon != 0 || snap.distance_dec != 0);
+            const long t = now_ms();
+            if (showing && t - last_update_ms >= 8000) {
+                LOGD("hud sender: no guidance from phone for 8 s — blanking HUD");
+                NaviSnapshot blank = NaviSnapshot();
+                send_one(blank, prev, sync_bit);
+                prev = blank;
+                blanked = true;
+                last_send_ms = t;
+            } else if (showing && t - last_send_ms >= 2000) {
+                // Keepalive: re-send the whole current frame.
+                NaviSnapshot none = NaviSnapshot();
+                send_one(snap, none, sync_bit);
+                prev = snap;
+                last_send_ms = t;
+            }
+        }
+#endif
 
         // Predicated wait — wake when seq advances past what we
         // just processed, or when shutdown is requested. Closes
         // the lost-wakeup race window between the snapshot read
         // and the wait.
         std::unique_lock<std::mutex> lk(g_cv_mu);
+#ifdef FW70_PORT
+        g_cv.wait(lk, [&]() {
+            return g_stop.load(std::memory_order_relaxed) ||
+                   g_seq.load(std::memory_order_acquire) != last_processed ||
+                   s_tick.load(std::memory_order_acquire) != last_tick;
+        });
+        last_tick = s_tick.load(std::memory_order_acquire);
+#else
         g_cv.wait(lk, [&]() {
             return g_stop.load(std::memory_order_relaxed) ||
                    g_seq.load(std::memory_order_acquire) != last_processed;
         });
+#endif
     }
+#ifdef FW70_PORT
+    if (ticker_up) pthread_join(ticker, nullptr);
+#endif
 
     // Stop the producers from writing, then clear the HUD and
     // release the clients we own.
