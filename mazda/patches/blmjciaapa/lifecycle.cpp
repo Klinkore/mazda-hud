@@ -229,6 +229,18 @@ int aap_create_session(const char *cfg, void *unknown_r1,
     LOGD("aap_create_session: ENTER cfg=%p r1=%p cb_list=%p out_handle=%p",
          (const void *)cfg, unknown_r1, cb_list, (void *)out_handle);
 
+#ifdef FW70_PORT
+    // FW 70.00.100: libaap_interface.so aap_create_session is
+    // (cfg, cb_list, out_handle) — verified: it memcpy()s the callback
+    // table from r1 (0x3c bytes) and writes the session handle via r2.
+    // FW74 has an extra always-NULL r1, shifting both by one register.
+    void  *cb_tbl = unknown_r1;
+    void **out_h  = reinterpret_cast<void **>(cb_list);
+#else
+    void  *cb_tbl = cb_list;
+    void **out_h  = out_handle;
+#endif
+
     resolve_real_once();
     LOGD("aap_create_session: resolve_real_once done "
          "(real_create=%p real_destroy=%p)",
@@ -263,7 +275,7 @@ int aap_create_session(const char *cfg, void *unknown_r1,
     // we leave slot 10 NULL so nav events are dropped by the SDK as on
     // a stock library (no point capturing data we won't forward).
     if (g_enabled && libpatch_config::hud_enabled()) {
-        hud_pre_aap_create_session(cb_list);
+        hud_pre_aap_create_session(cb_tbl);
     }
 
     // Wireless GAL-1.6 BT-pairing bypass: wrap ProjectionStatusCb
@@ -274,27 +286,27 @@ int aap_create_session(const char *cfg, void *unknown_r1,
     // sessions are unaffected. Must run before the real create so the
     // SDK copies our wrapper into the session handle's callback table.
     if (g_enabled && libpatch_config::use_protocol_v1_6()) {
-        bt16pair_pre_aap_create_session(cb_list);
+        bt16pair_pre_aap_create_session(cb_tbl);
     }
 
     LOGD("aap_create_session: calling real impl at %p",
          (void *)g_real_create);
     int rc = g_real_create(cfg, unknown_r1, cb_list, out_handle);
-    LOGD("aap_create_session: real impl returned rc=%d *out_handle=%p",
-         rc, (out_handle && *out_handle) ? *out_handle : nullptr);
+    LOGD("aap_create_session: real impl returned rc=%d *out_h=%p",
+         rc, (out_h && *out_h) ? *out_h : nullptr);
 
-    if (rc != 0 || !g_enabled || !out_handle || !*out_handle) {
+    if (rc != 0 || !g_enabled || !out_h || !*out_h) {
         LOGD("aap_create_session: NOT starting touch reader "
              "(rc=%d g_enabled=%d out_handle=%p *out_handle=%p)",
-             rc, g_enabled ? 1 : 0, (void *)out_handle,
-             (out_handle && *out_handle) ? *out_handle : nullptr);
+             rc, g_enabled ? 1 : 0, (void *)out_h,
+             (out_h && *out_h) ? *out_h : nullptr);
         return rc;
     }
 
     // OEM retries with sleep(1) on rc==0x104; our reader is keyed off
     // the FIRST successful create, so we only start once per process.
     pthread_mutex_lock(&g_session_mu);
-    g_session = *out_handle;
+    g_session = *out_h;
     if (!g_session_up) {
         if (libpatch_config::touch_enabled()) {
             LOGD("aap_create_session: spawning touch reader");
