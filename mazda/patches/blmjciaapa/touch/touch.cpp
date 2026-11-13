@@ -32,6 +32,7 @@
 #include <string.h>
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 
 #if !defined(EFD_CLOEXEC)
@@ -298,6 +299,23 @@ void *reader_main(void *)
                 use_raw = true;
                 LOGD("touch reader: raw panel delivers events — using it "
                      "(touch works while driving)");
+            }
+
+            // Diagnostics: count frames per source; log once per 10 s window
+            // that saw activity, so we can tell if a source goes silent while
+            // driving.
+            {
+                static unsigned frames[2] = {0, 0};
+                static time_t window = 0;
+                ++frames[k];
+                time_t now = time(nullptr);
+                if (window == 0) window = now;
+                if (now - window >= 10) {
+                    LOGD("touch stats (10 s): filtered=%u raw=%u using=%s",
+                         frames[0], frames[1], use_raw ? "raw" : "filtered");
+                    frames[0] = frames[1] = 0;
+                    window = now;
+                }
             }
 
             const bool active = (k == 1) == use_raw;

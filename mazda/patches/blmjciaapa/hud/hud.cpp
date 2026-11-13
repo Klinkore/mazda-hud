@@ -911,9 +911,12 @@ void *allgo_log_cap_main(void *)
 {
     for (;;) {
         struct stat st;
-        if (stat("/tmp/ALLGO_LOG.txt", &st) == 0 && st.st_size > 8L * 1024 * 1024) {
-            truncate("/tmp/ALLGO_LOG.txt", 0);
-            LOGW("allgo log cap: /tmp/ALLGO_LOG.txt exceeded 8 MB — truncated");
+        static const char *const kLogs[] = { "/tmp/ALLGO_LOG.txt", "/tmp/AAPA_LOG.txt" };
+        for (const char *p : kLogs) {
+            if (stat(p, &st) == 0 && st.st_size > 8L * 1024 * 1024) {
+                truncate(p, 0);
+                LOGW("allgo log cap: %s exceeded 8 MB — truncated", p);
+            }
         }
         sleep(15);
     }
