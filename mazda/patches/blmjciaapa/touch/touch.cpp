@@ -235,7 +235,12 @@ void *reader_main(void *)
         LOGD("touch reader thread exiting (no device)");
         return nullptr;
     }
-    int fd_r = open_raw_panel();             // raw (optional)
+    // Raw panel only when explicitly enabled: on this car it did not make
+    // touch work above ~10 km/h, so the default is the stock filtered node
+    // (the path the original mod was validated with).
+    int fd_r = (access("/data_persist/oem-aa-mod/rawtouch", F_OK) == 0)
+                   ? open_raw_panel() : -1;
+    LOGD("touch reader: raw panel %s", fd_r >= 0 ? "enabled" : "disabled (filtered only)");
 
     SrcState src[2];
     src[0].fd = fd_f; src[1].fd = fd_r;

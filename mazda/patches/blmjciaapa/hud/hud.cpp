@@ -904,12 +904,26 @@ static void nav16_on_status(const AaStatus *s)
 void *hud_selftest_main(void *)
 {
     sleep(20);
-    LOGD("hud selftest: drawing RIGHT / 300 m / TEST for 15 s");
-    for (int i = 0; i < 15; ++i) {
-        g_tx->status(1);
-        g_tx->next_turn("TEST", HUD_RIGHT);
-        g_tx->distance(3000 - i * 100, 1);   // 300.0 m counting down, METERS
-        sleep(1);
+    // Distance probe: which distance encodings does this HUD render?
+    // Each step is held 5 s. Glyph alternates RIGHT/LEFT so steps are
+    // distinguishable even if the number is not drawn.
+    struct Step { uint32_t icon; int32_t dist_dec; uint8_t unit; const char *what; };
+    static const Step kSteps[] = {
+        { HUD_RIGHT, 2500, 1, "1: RIGHT 250 m (meters, x10)" },
+        { HUD_LEFT,  3500, 1, "2: LEFT  350 m (meters, x10)" },
+        { HUD_RIGHT, 9000, 1, "3: RIGHT 900 m (meters, x10)" },
+        { HUD_LEFT,     9, 3, "4: LEFT  0.9 km (km, x10)" },
+        { HUD_RIGHT,   15, 3, "5: RIGHT 1.5 km (km, x10)" },
+        { HUD_LEFT,   350, 1, "6: LEFT  350 m (meters, NOT x10)" },
+    };
+    for (const Step &s : kSteps) {
+        LOGD("hud selftest step %s", s.what);
+        for (int i = 0; i < 5; ++i) {
+            g_tx->status(1);
+            g_tx->next_turn("TEST", s.icon);
+            g_tx->distance(s.dist_dec, s.unit);
+            sleep(1);
+        }
     }
     g_tx->next_turn("", HUD_BLANK);
     g_tx->distance(0, 0);
