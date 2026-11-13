@@ -34,6 +34,8 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <string.h>
 
 namespace {
@@ -89,6 +91,61 @@ void oem_self_gate(void)
             g_enabled = false;
             return;
         }
+    }
+
+    // fw70 port: boot-loop protection. jciAAPA is reset_board="yes" in
+    // sm.conf, so if this shim ever crashes or hangs the service, the
+    // whole unit reboots and we'd load again. Go inert when:
+    //   * /data_persist/oem-aa-mod/disabled exists (manual kill switch),
+    //   * the fatal-signal handler recorded >= 2 crashes, or
+    //   * >= 3 consecutive starts never reached 120 s of uptime.
+    {
+        const char *kDir      = "/data_persist/oem-aa-mod/";
+        char path[128];
+
+        snprintf(path, sizeof(path), "%sdisabled", kDir);
+        if (access(path, F_OK) == 0) {
+            LOGW("self-gate: kill switch file present — disabling shim");
+            g_enabled = false;
+            return;
+        }
+
+        snprintf(path, sizeof(path), "%scrashes", kDir);
+        struct stat st;
+        if (stat(path, &st) == 0 && st.st_size >= 2) {
+            LOGW("self-gate: %ld recorded crashes — disabling shim",
+                 (long)st.st_size);
+            g_enabled = false;
+            return;
+        }
+
+        snprintf(path, sizeof(path), "%sbootcount", kDir);
+        int count = 0;
+        FILE *bf = fopen(path, "r");
+        if (bf) { if (fscanf(bf, "%d", &count) != 1) count = 0; fclose(bf); }
+        if (count >= 3) {
+            LOGW("self-gate: %d unstable starts in a row — disabling shim", count);
+            g_enabled = false;
+            return;
+        }
+        bf = fopen(path, "w");
+        if (bf) { fprintf(bf, "%d\n", count + 1); fflush(bf); fsync(fileno(bf)); fclose(bf); }
+
+        // After 120 s of stable running, reset the counter.
+        pthread_t t;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&t, &attr, [](void *) -> void * {
+                sleep(120);
+                FILE *f = fopen("/data_persist/oem-aa-mod/bootcount", "w");
+                if (f) { fputs("0\n", f); fflush(f); fsync(fileno(f)); fclose(f); }
+                return nullptr;
+            }, nullptr) != 0) {
+            LOGW("self-gate: could not start bootcount reset thread");
+        }
+        pthread_attr_destroy(&attr);
+        LOGD("self-gate: boot-loop guard ok (previous unstable starts=%d)", count);
     }
 
     g_enabled = true;

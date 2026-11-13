@@ -131,6 +131,24 @@ static inline void preload_fatal_signal_handler(int sig, siginfo_t *info,
         close(mfd);
     }
 
+#ifdef FW70_PORT
+    // fw70 port: persistent crash marker (one byte per fatal signal). The
+    // jciAAPA service is reset_board="yes", so a crash reboots the unit;
+    // lifecycle.cpp's self-gate reads this counter on the next boot and
+    // turns the shim into an inert pass-through after 2 crashes, which
+    // breaks any crash -> reboot -> crash loop. open/write/fsync/close
+    // are async-signal-safe.
+    {
+        int cfd = open("/data_persist/oem-aa-mod/crashes",
+                       O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+        if (cfd >= 0) {
+            (void)!write(cfd, "x", 1);
+            fsync(cfd);
+            close(cfd);
+        }
+    }
+#endif
+
     // Restore default disposition and re-raise so the kernel still
     // writes a core dump that can be cross-gdb'd later.
     signal(sig, SIG_DFL);
