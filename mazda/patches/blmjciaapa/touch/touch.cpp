@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #if !defined(EFD_CLOEXEC)
@@ -152,6 +153,167 @@ int open_touch_device(void)
     return -1;
 }
 
+#ifdef FW70_PORT
+// ---------------------------------------------------------------------
+// fw70: dual-source reader.
+//
+// /dev/input/filtered-touchscreen0 is produced by the OEM input filter,
+// which stops forwarding touches while the car is moving. The raw panel
+// ("LVDS TouchScreen", normally event0) has identical capabilities and is
+// not speed-filtered. We open both: as soon as the raw node delivers a
+// frame we switch to it for the rest of the session; if it never does
+// (e.g. it is EVIOCGRAB'ed by the filter daemon) we keep using the
+// filtered node exactly as before.
+// ---------------------------------------------------------------------
+int open_raw_panel(void)
+{
+    for (int i = 0; i < 10; ++i) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/input/event%d", i);
+        int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+        if (fd < 0) continue;
+        char name[64] = {0};
+        if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) >= 0 &&
+            strcmp(name, "LVDS TouchScreen") == 0) {
+            LOGD("touch reader: raw panel %s (\"%s\") fd=%d", path, name, fd);
+            return fd;
+        }
+        close(fd);
+    }
+    LOGW("touch reader: raw panel \"LVDS TouchScreen\" not found");
+    return -1;
+}
+
+struct SrcState {
+    int     fd;
+    MtState st;
+    int     slot;
+    bool    seen_frame;
+};
+
+// Apply one evdev event to a source's MT state. Returns true on SYN_REPORT
+// (a complete frame is ready), false otherwise. Sets *dropped on SYN_DROPPED.
+bool apply_event(SrcState *s, const struct input_event &ev, bool *dropped)
+{
+    *dropped = false;
+    if (ev.type == EV_ABS) {
+        switch (ev.code) {
+        case ABS_MT_SLOT:
+            s->slot = (ev.value >= 0 && ev.value < kMaxFingers) ? ev.value : 0;
+            break;
+        case ABS_MT_TRACKING_ID:
+            s->st.fingers[s->slot].tracking_id = ev.value;
+            break;
+        case ABS_MT_POSITION_X:
+            s->st.fingers[s->slot].x = static_cast<uint32_t>(ev.value);
+            break;
+        case ABS_MT_POSITION_Y:
+            s->st.fingers[s->slot].y = static_cast<uint32_t>(ev.value);
+            break;
+        default:
+            break;
+        }
+    } else if (ev.type == EV_SYN) {
+        if (ev.code == SYN_REPORT) {
+            recount_active(&s->st);
+            return true;
+        }
+        if (ev.code == SYN_DROPPED) {
+            init_state(&s->st);
+            *dropped = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+void *reader_main(void *)
+{
+    int fd_f = open_touch_device();          // filtered (always needed)
+    if (fd_f < 0) {
+        LOGD("touch reader thread exiting (no device)");
+        return nullptr;
+    }
+    int fd_r = open_raw_panel();             // raw (optional)
+
+    SrcState src[2];
+    src[0].fd = fd_f; src[1].fd = fd_r;
+    for (int k = 0; k < 2; ++k) {
+        init_state(&src[k].st);
+        src[k].slot = 0;
+        src[k].seen_frame = false;
+    }
+    bool use_raw = false;
+
+    for (;;) {
+        struct pollfd pfds[3] = {
+            { fd_f,      POLLIN, 0 },
+            { g_stop_fd, POLLIN, 0 },
+            { fd_r,      POLLIN, 0 },        // fd -1 is ignored by poll()
+        };
+        int pr = poll(pfds, 3, -1);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            LOGE("touch reader: poll() failed: %s", strerror(errno));
+            break;
+        }
+        if (pfds[1].revents & POLLIN) {
+            LOGD("touch reader: stop signalled");
+            break;
+        }
+
+        for (int k = 0; k < 2; ++k) {
+            const int pidx = (k == 0) ? 0 : 2;
+            if (src[k].fd < 0 || !(pfds[pidx].revents & POLLIN)) continue;
+
+            struct input_event ev;
+            ssize_t n = read(src[k].fd, &ev, sizeof(ev));
+            if (n != static_cast<ssize_t>(sizeof(ev))) {
+                if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+                LOGE("touch reader: read error on %s source (%zd, errno=%d) — dropping it",
+                     k == 0 ? "filtered" : "raw", n, errno);
+                close(src[k].fd);
+                src[k].fd = -1;
+                if (k == 0) fd_f = -1; else fd_r = -1;
+                if (k == 1 && use_raw) {
+                    // Raw died mid-session: release fingers, go back to filtered.
+                    MtState empty; init_state(&empty);
+                    touch_on_frame(empty);
+                    use_raw = false;
+                }
+                continue;
+            }
+
+            bool dropped = false;
+            if (!apply_event(&src[k], ev, &dropped)) continue;
+
+            if (k == 1 && !use_raw) {
+                // First complete raw frame: switch over. If the filtered
+                // stream has fingers down, release them first so the phone
+                // sees a clean UP before the raw stream takes over.
+                if (src[0].st.n_active > 0) {
+                    MtState empty; init_state(&empty);
+                    touch_on_frame(empty);
+                }
+                use_raw = true;
+                LOGD("touch reader: raw panel delivers events — using it "
+                     "(touch works while driving)");
+            }
+
+            const bool active = (k == 1) == use_raw;
+            if (!active) continue;
+            if (dropped) LOGW("touch reader: SYN_DROPPED — resetting slot state");
+            touch_on_frame(src[k].st);
+        }
+        if (fd_f < 0 && fd_r < 0) break;
+    }
+
+    if (fd_f >= 0) close(fd_f);
+    if (fd_r >= 0) close(fd_r);
+    LOGD("touch reader thread exiting");
+    return nullptr;
+}
+#else
 void *reader_main(void *)
 {
     int fd = open_touch_device();
@@ -255,6 +417,7 @@ void *reader_main(void *)
     LOGD("touch reader thread exiting");
     return nullptr;
 }
+#endif  // FW70_PORT
 
 } // namespace
 

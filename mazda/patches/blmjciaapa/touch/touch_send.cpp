@@ -107,7 +107,16 @@ void send_event(const SnapEntry *entries, int n,
     for (int i = 0; i < n; ++i) {
         evt.x[i]          = scale_x(entries[i].fg.x);
         evt.y[i]          = scale_y(entries[i].fg.y);
+#ifdef FW70_PORT
+        // fw70: Android MotionEvent pointer ids must be 0..31. The kernel
+        // tracking_id grows without bound (one per touch), so after a
+        // while multi-finger gestures carried ids > 31 and apps crashed.
+        // The MT slot index is stable for the finger's whole lifetime and
+        // always 0..kMaxFingers-1, so use it as the pointer id.
+        evt.pointer_id[i] = static_cast<uint32_t>(entries[i].slot);
+#else
         evt.pointer_id[i] = static_cast<uint32_t>(entries[i].fg.tracking_id);
+#endif
     }
 
     // Verbose dump of the outgoing event — one line per finger so

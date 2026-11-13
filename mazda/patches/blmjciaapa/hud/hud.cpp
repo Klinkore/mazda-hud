@@ -29,6 +29,9 @@
 #include "hud_nav.h"    // compute_turn_icon() — AA turn fields -> Mazda HUD glyph
 #include "hud_lane.h"   // oem_lane_code_for_aa — AA lanes -> OEM lane codes
 #include "common/string_safe.h"
+#include <pthread.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -881,9 +884,70 @@ static void nav16_on_status(const AaStatus *s)
     }
 }
 
+#ifdef FW70_PORT
+// fw70 diagnostic: if /data_persist/oem-aa-mod/hudtest exists, 20 s after
+// the session comes up draw "RIGHT, 300 m, TEST" on the HUD for 15 s, then
+// blank it. Proves the vbs -> HUD output path independently of the phone.
+void *hud_selftest_main(void *)
+{
+    sleep(20);
+    LOGD("hud selftest: drawing RIGHT / 300 m / TEST for 15 s");
+    for (int i = 0; i < 15; ++i) {
+        g_tx->status(1);
+        g_tx->next_turn("TEST", HUD_RIGHT);
+        g_tx->distance(3000 - i * 100, 1);   // 300.0 m counting down, METERS
+        sleep(1);
+    }
+    g_tx->next_turn("", HUD_BLANK);
+    g_tx->distance(0, 0);
+    LOGD("hud selftest: done, HUD blanked");
+    return nullptr;
+}
+
+// fw70 diagnostic: aap_service's own AllGo log (enabled via LOG_PREF in
+// sm.conf) goes to tmpfs /tmp/ALLGO_LOG.txt with no size limit. Keep it
+// under 8 MB so a long drive can never fill /tmp.
+void *allgo_log_cap_main(void *)
+{
+    for (;;) {
+        struct stat st;
+        if (stat("/tmp/ALLGO_LOG.txt", &st) == 0 && st.st_size > 8L * 1024 * 1024) {
+            truncate("/tmp/ALLGO_LOG.txt", 0);
+            LOGW("allgo log cap: /tmp/ALLGO_LOG.txt exceeded 8 MB — truncated");
+        }
+        sleep(15);
+    }
+    return nullptr;
+}
+#endif
+
 void hud_post_aap_create_session(void)
 {
     hud_tx_start();
+#ifdef FW70_PORT
+    if (access("/data_persist/oem-aa-mod/hudtest", F_OK) == 0) {
+        pthread_t t;
+        pthread_attr_t a;
+        pthread_attr_init(&a);
+        pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&t, &a, hud_selftest_main, nullptr) != 0)
+            LOGW("hud selftest: thread start failed");
+        pthread_attr_destroy(&a);
+    }
+    {
+        static bool cap_started = false;
+        if (!cap_started) {
+            cap_started = true;
+            pthread_t t;
+            pthread_attr_t a;
+            pthread_attr_init(&a);
+            pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+            if (pthread_create(&t, &a, allgo_log_cap_main, nullptr) != 0)
+                LOGW("allgo log cap: thread start failed");
+            pthread_attr_destroy(&a);
+        }
+    }
+#endif
     if (hud_distance_filter_enabled()) legacy_filter_reset();
     // Start the GAL 1.6 receiver only when that protocol is enabled — otherwise
     // the aap_service shim never sends and the socket would idle for nothing.
