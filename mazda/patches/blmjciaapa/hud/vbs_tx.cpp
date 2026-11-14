@@ -412,8 +412,10 @@ void *sender_main(void *)
     // fw70: a 1 s ticker wakes this loop so we can (a) re-send the current
     // frame every 2 s — otherwise the OEM nav service's own (blank) HUD
     // frames win whenever the phone's guidance doesn't change the shown
-    // value — and (b) blank the HUD after 8 s without any guidance from
+    // value — and (b) blank the HUD after 3 min without any guidance from
     // the phone (AA unplugged, nav app closed: no STOP ever arrives).
+    // The phone legitimately goes silent for 10-50 s mid-route (logs5/6), so
+    // this is only a long fallback; STOP / session teardown clear immediately.
     // A pthread ticker instead of condition_variable::wait_for, whose
     // chrono symbols are missing from the unit's libstdc++ 6.0.14.
     static std::atomic<uint32_t> s_tick{0};
@@ -475,9 +477,10 @@ void *sender_main(void *)
 #ifdef FW70_PORT
         {
             const bool showing = !blanked && (snap.dir_icon != 0 || snap.distance_dec != 0);
+            const long kNoGuidanceMs = 180000;   // 3 min fallback
             const long t = now_ms();
-            if (showing && t - last_update_ms >= 8000) {
-                LOGD("hud sender: no guidance from phone for 8 s — blanking HUD");
+            if (showing && t - last_update_ms >= kNoGuidanceMs) {
+                LOGD("hud sender: no guidance from phone for 3 min — blanking HUD");
                 NaviSnapshot blank = NaviSnapshot();
                 send_one(blank, prev, sync_bit);
                 prev = blank;

@@ -675,6 +675,17 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         // best-guess angle from the exit number: exit 1 ~ 90 deg (first
         // right), 2 ~ 180 (straight), 3 ~ 270 (left), 4 ~ 360 (U-turn).
         // Implausible exit numbers fall back to "straight through".
+        // Yandex also sends ROUNDABOUT_ENTER (11) with an exit number
+        // (logs5: 38 frames, exit=1). kTurnIcons has no glyph for 11/12,
+        // so the HUD went blank; render them as ENTER_AND_EXIT instead.
+        {
+            const uint32_t ev = decode_turn_event(t70.turn_event);
+            if (ev == NAV_TURN_EVENT_ROUNDABOUT_ENTER ||
+                ev == NAV_TURN_EVENT_ROUNDABOUT_EXIT) {
+                LOGD("nav 0x501: roundabout event %u -> ENTER_AND_EXIT", (unsigned)ev);
+                t70.turn_event = NAV_TURN_EVENT_ROUNDABOUT_ENTER_AND_EXIT;
+            }
+        }
         if (decode_turn_event(t70.turn_event) == NAV_TURN_EVENT_ROUNDABOUT_ENTER_AND_EXIT &&
             t70.turn_angle == 0) {
             const int32_t n = t70.turn_number;
