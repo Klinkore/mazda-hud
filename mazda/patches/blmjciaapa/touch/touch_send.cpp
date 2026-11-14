@@ -302,7 +302,40 @@ void touch_on_frame(const MtState &cur)
          n_falling, n_rising, any_moved ? 1 : 0, n_survivors);
 
     // ----- Step 1: POINTER_UP / UP for each falling slot ------------
+#ifdef FW70_PORT
+    // fw70 fix: when several fingers lift in the same frame (very common at
+    // the end of a pinch) the original code built every release snapshot
+    // from survivors only, so it sent two UP events with 1 pointer each
+    // while the phone still had 2 pointers down. Android then lost track
+    // of the gesture and only single taps kept working. Release them
+    // incrementally instead: start from survivors + ALL falling fingers and
+    // drop one per event (POINTER_UP while >1 remain, final UP last).
+    if (n_falling > 0) {
+        SnapEntry rel[kMaxFingers];
+        memcpy(rel, survivors, sizeof(SnapEntry) * n_survivors);
+        int rel_n = n_survivors;
+        for (int i = 0; i < n_falling; ++i) {
+            const int slot = falling_slots[i];
+            insert_sorted(rel, rel_n, slot, g_prev.fingers[slot]);
+            ++rel_n;
+        }
+        for (int i = 0; i < n_falling; ++i) {
+            const int slot = falling_slots[i];
+            int idx = 0;
+            for (int j = 0; j < rel_n; ++j) {
+                if (rel[j].slot == slot) { idx = j; break; }
+            }
+            AAPTouchAction act = (rel_n == 1) ? kAAPTouchActionUp
+                                              : kAAPTouchActionPointerUp;
+            send_event(rel, rel_n, act, (rel_n == 1) ? 0 : idx);
+            for (int j = idx; j < rel_n - 1; ++j) rel[j] = rel[j + 1];
+            --rel_n;
+        }
+    }
+    for (int i = 0; false && i < n_falling; ++i) {
+#else
     for (int i = 0; i < n_falling; ++i) {
+#endif
         int slot = falling_slots[i];
 
         // Snapshot: survivors + this falling finger (at its PREV pos
