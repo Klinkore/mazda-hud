@@ -133,7 +133,40 @@ void send_event(const SnapEntry *entries, int n,
         LOGV("send_event: RaceAap not available, skipping");
         return;
     }
+#ifdef FW70_PORT
+    // fw70: keep the phone's view of the gesture consistent. If an UP was
+    // ever lost (e.g. suppressed while AA video was not in focus), Android
+    // keeps a "stuck" pointer and two-finger gestures stop working for the
+    // rest of the session. Before starting a new gesture, release whatever
+    // the phone still believes is pressed.
+    static AAP_TouchEvent s_last;
+    static int            s_phone_down = 0;
+    if (action == kAAPTouchActionDown && s_phone_down > 0) {
+        LOGD("touch: phone still has %d pointer(s) down — releasing before new gesture",
+             s_phone_down);
+        AAP_TouchEvent rel = s_last;
+        for (int k = s_phone_down; k >= 1; --k) {
+            rel.finger_count = static_cast<uint32_t>(k);
+            rel.action       = (k == 1) ? kAAPTouchActionUp : kAAPTouchActionPointerUp;
+            rel.action_index = (k == 1) ? 0 : static_cast<uint32_t>(k - 1);
+            RaceAap_SendTouchInput(race, &rel);
+        }
+        s_phone_down = 0;
+    }
+#endif
     int rc = RaceAap_SendTouchInput(race, &evt);
+#ifdef FW70_PORT
+    if (rc == 0) {
+        s_last = evt;
+        switch (action) {
+        case kAAPTouchActionDown:        s_phone_down = 1; break;
+        case kAAPTouchActionPointerDown: s_phone_down = n; break;
+        case kAAPTouchActionPointerUp:   s_phone_down = n - 1; break;
+        case kAAPTouchActionUp:          s_phone_down = 0; break;
+        case kAAPTouchActionMove:        s_phone_down = n; break;
+        }
+    }
+#endif
     LOGV("send_event: SendTouchInput -> %d", rc);
 #ifdef FW70_PORT
     if (action == kAAPTouchActionPointerDown || action == kAAPTouchActionPointerUp) {

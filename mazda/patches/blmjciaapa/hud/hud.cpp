@@ -622,7 +622,10 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         if (decode_turn_event(t70.turn_event) == NAV_TURN_EVENT_ROUNDABOUT_ENTER_AND_EXIT &&
             t70.turn_angle == 0) {
             const int32_t n = t70.turn_number;
-            t70.turn_angle = (n >= 1 && n <= 6) ? n * 90 : 180;
+            // Exit 4+ on non-standard roundabouts was seen at ~160 deg, so
+            // only exits 1..3 map to right/straight/left; anything else
+            // is shown as "straight through".
+            t70.turn_angle = (n >= 1 && n <= 3) ? n * 90 : 180;
             LOGD("nav 0x501: roundabout without angle — exit=%d -> guessed angle=%d",
                  (int)n, (int)t70.turn_angle);
         }
