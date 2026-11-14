@@ -1,0 +1,7 @@
+# local only (not published)
+*.md
+releases/
+dump70/
+dump70b/
+logs*/
+tools/node_modules/
