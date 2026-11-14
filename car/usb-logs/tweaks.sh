@@ -15,6 +15,8 @@ cp -a /data_persist/oem-aa-mod/crashes /data_persist/oem-aa-mod/bootcount "${OUT
 grep -A3 'name="jciAAPA"' /jci/sm/sm.conf > "${OUT}/sm_jciAAPA.txt" 2>&1
 cp /etc/aap_system_attributes.xml "${OUT}/" 2>/dev/null
 cp /tmp/smevents.txt "${OUT}/" 2>/dev/null
+cp /tmp/ALLGO_LOG.txt "${OUT}/" 2>/dev/null
+cp -r /tmp/oem-aa-mod-img "${OUT}/" 2>/dev/null
 ps > "${OUT}/ps.txt" 2>&1
 for p in /proc/[0-9]*; do grep -q jciAAPA $p/cmdline 2>/dev/null && { echo "== $p"; grep -i -e aap -e libpatch $p/maps; }; done > "${OUT}/jciAAPA_maps.txt" 2>&1
 sync

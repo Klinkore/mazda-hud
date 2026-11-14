@@ -30,6 +30,9 @@
 #include "hud_lane.h"   // oem_lane_code_for_aa — AA lanes -> OEM lane codes
 #include "common/string_safe.h"
 #include <pthread.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -546,6 +549,56 @@ void dump_distance(const DistanceHdr *h)
          nav_distance_unit_name(h->display_distance_unit));
 }
 
+#ifdef FW70_PORT
+// fw70 diagnostic: with <cluster_type>IMAGE</cluster_type> the phone attaches
+// a maneuver icon (PNG) to every 0x501. While the debug flag exists, save each
+// distinct icon once to /tmp/oem-aa-mod-img/<hash>_e<event>_n<number>.png and
+// append a line to index.txt whenever the icon changes, so roundabout icons can
+// be matched to the real exit direction offline.
+void dump_turn_image(const uint8_t *img, uint32_t len, uint32_t event,
+                     uint32_t side, int32_t angle, int32_t number,
+                     const char *road)
+{
+    static uint32_t s_last = 0;
+    static uint32_t s_saved[256];
+    static unsigned s_nsaved = 0;
+    if (access("/data_persist/oem-aa-mod/debug", F_OK) != 0) return;
+    if (len > 0x800) len = 0x800;
+    uint32_t h = 2166136261u;                       // FNV-1a
+    for (uint32_t i = 0; i < len; ++i) { h ^= img[i]; h *= 16777619u; }
+    if (len == 0) h = 0;
+    if (h == s_last) return;
+    s_last = h;
+
+    const char *dir = "/tmp/oem-aa-mod-img";
+    mkdir(dir, 0755);
+    char line[512];
+    int n = snprintf(line, sizeof(line),
+                     "%ld len=%u hash=%08x event=%u side=%u angle=%d number=%d road=%s\n",
+                     (long)time(NULL), (unsigned)len, (unsigned)h, (unsigned)event,
+                     (unsigned)side, (int)angle, (int)number, road ? road : "");
+    int fd = open("/tmp/oem-aa-mod-img/index.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        if (n > 0) (void)!write(fd, line, (size_t)(n < (int)sizeof(line) ? n : (int)sizeof(line) - 1));
+        close(fd);
+    }
+    LOGD("nav 0x501 image: len=%u hash=%08x", (unsigned)len, (unsigned)h);
+    if (len == 0) return;
+    for (unsigned i = 0; i < s_nsaved; ++i)
+        if (s_saved[i] == h) return;
+    if (s_nsaved >= sizeof(s_saved) / sizeof(s_saved[0])) return;
+    s_saved[s_nsaved++] = h;
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%08x_e%u_n%d.png", dir, (unsigned)h,
+             (unsigned)event, (int)number);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        (void)!write(fd, img, len);
+        close(fd);
+    }
+}
+#endif
+
 void our_nav_cb(void *user_ctx, void *hdr36)
 {
     (void)user_ctx;  // We don't set cb_list[18], so this is NULL.
@@ -613,6 +666,9 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         t70.image_len     = 0;
         t70.turn_angle    = *reinterpret_cast<const int32_t *>(raw + 0x914);
         t70.turn_number   = *reinterpret_cast<const int32_t *>(raw + 0x918);
+        dump_turn_image(raw + 0x110, *reinterpret_cast<const uint32_t *>(raw + 0x910),
+                        t70.turn_event, t70.turn_side, t70.turn_angle,
+                        t70.turn_number, road70);
         // Yandex (and some AA versions) send roundabouts with
         // turn_angle = 0 and only an exit number, which the angle-indexed
         // HUD roundabout glyphs render as the wrong exit. Derive a

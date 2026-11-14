@@ -83,7 +83,9 @@ Refer the Configuration Parameters in the Appendix section of API documentation 
             </media>
             <navigation>
                 <subscribe>TRUE</subscribe>
-                <cluster_type>ENUM</cluster_type>
+                <cluster_type>IMAGE</cluster_type>
+                <icon_width>64</icon_width>
+                <icon_height>64</icon_height>
             </navigation>
             <notification>
                 <subscribe>FALSE</subscribe>

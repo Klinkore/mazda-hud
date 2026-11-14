@@ -50,6 +50,7 @@ collect_logs()
   cp /tmp/smevents.txt "${OUT}/" 2>/dev/null
   cp /tmp/ALLGO_LOG.txt "${OUT}/" 2>/dev/null
   cp /tmp/AAPA_LOG.txt "${OUT}/" 2>/dev/null
+  cp -r /tmp/oem-aa-mod-img "${OUT}/" 2>/dev/null
   ls -la /tmp > "${OUT}/tmp_ls.txt" 2>&1
   ps > "${OUT}/ps.txt" 2>&1
   for p in /proc/[0-9]*; do grep -q jciAAPA $p/cmdline 2>/dev/null && { echo "== $p"; grep -i -e aap -e libpatch $p/maps; }; done > "${OUT}/jciAAPA_maps.txt" 2>&1
@@ -156,7 +157,7 @@ same "${SRC}/libpatch-blmjciaapa.so" "${DST}/libpatch-blmjciaapa.so" || fail "li
 # fresh guard counters + debug log enabled
 rm -f "${DST}/crashes" "${DST}/bootcount" "${DST}/disabled"
 touch "${DST}/debug"
-touch "${DST}/hudtest"
+rm -f "${DST}/hudtest"
 sync
 log "Library installed"
 
