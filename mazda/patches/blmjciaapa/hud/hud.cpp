@@ -625,7 +625,8 @@ void our_nav_cb(void *user_ctx, void *hdr36)
             // Exit 4+ on non-standard roundabouts was seen at ~160 deg, so
             // only exits 1..3 map to right/straight/left; anything else
             // is shown as "straight through".
-            t70.turn_angle = (n >= 1 && n <= 3) ? n * 90 : 180;
+            // User choice: exits 4+ are shown as a U-turn (360 deg).
+            t70.turn_angle = (n >= 1 && n <= 3) ? n * 90 : (n >= 4 ? 360 : 180);
             LOGD("nav 0x501: roundabout without angle — exit=%d -> guessed angle=%d",
                  (int)n, (int)t70.turn_angle);
         }
