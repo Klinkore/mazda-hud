@@ -13,6 +13,8 @@
 #include "common/thread_util.h"
 
 #include <pthread.h>
+#include <dlfcn.h>
+#include <sys/mman.h>
 #include <cstdlib>
 #include <cstdio>
 #include <string.h>
@@ -341,10 +343,72 @@ int our_projection_status_cb(void *user, int ev, void *data)
     return rc;
 }
 
+#ifdef FW70_PORT
+// FW70: AapConnectionManager::ReceiveVideoSinkSetup (0x760a4) always calls
+// Bluetooth::StartBTConnection (0x81b28) at 0x76218 / 0x76248. Over the
+// wireless dongle at GAL 1.6 the phone never sends its in-band BT pairing
+// request, so the HMI-side BT procedure only completes on its ~2 min timeout
+// ("Got ready to pair after timeout", logs11b) — and at that moment the phone
+// drops Bluetooth audio and pauses its music. The session is already activated
+// by the bypass above, so with 1.6 on we turn both calls into NOPs.
+// Kill switch: /data_persist/oem-aa-mod/btstart keeps the stock behaviour.
+constexpr uintptr_t kOffGetServiceInterfaces = 0x0005c2ac;
+constexpr uintptr_t kOffStartBTConnection    = 0x00081b28;
+constexpr uintptr_t kBtStartCallSites[]      = {0x00076218, 0x00076248};
+constexpr uint32_t  kArmNop                  = 0xe1a00000;   // mov r0, r0
+
+void nop_bt_start_calls()
+{
+    static bool s_done = false;
+    if (s_done) return;
+    s_done = true;
+
+    if (access("/data_persist/oem-aa-mod/btstart", F_OK) == 0) {
+        LOGD("bt16pair: btstart flag present — keeping stock StartBTConnection");
+        return;
+    }
+    void *h   = dlopen("/jci/aapa/blmjciaapa.so", RTLD_NOW | RTLD_NOLOAD);
+    void *sym = h ? dlsym(h, "GetServiceInterfaces") : nullptr;
+    if (!sym) {
+        LOGW("bt16pair: blmjciaapa.so base unresolved — StartBTConnection left as is");
+        return;
+    }
+    const uintptr_t base = reinterpret_cast<uintptr_t>(sym) - kOffGetServiceInterfaces;
+
+    // Verify every site first: each must be exactly "bl StartBTConnection".
+    for (uintptr_t off : kBtStartCallSites) {
+        const uint32_t want = 0xeb000000u |
+            ((static_cast<uint32_t>((kOffStartBTConnection - (off + 8)) >> 2)) & 0x00ffffffu);
+        const uint32_t have = *reinterpret_cast<volatile uint32_t *>(base + off);
+        if (have != want && have != kArmNop) {
+            LOGE("bt16pair: ABORT NOP — 0x%08x at +0x%lx, expected 0x%08x",
+                 have, (unsigned long)off, want);
+            return;
+        }
+    }
+    const uintptr_t ps = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+    for (uintptr_t off : kBtStartCallSites) {
+        const uintptr_t a    = base + off;
+        const uintptr_t page = a & ~(ps - 1);
+        if (mprotect(reinterpret_cast<void *>(page), ps, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+            LOGE("bt16pair: mprotect RWX failed at +0x%lx — skipped", (unsigned long)off);
+            continue;
+        }
+        *reinterpret_cast<volatile uint32_t *>(a) = kArmNop;
+        __builtin___clear_cache(reinterpret_cast<char *>(a), reinterpret_cast<char *>(a + 4));
+        mprotect(reinterpret_cast<void *>(page), ps, PROT_READ | PROT_EXEC);
+        LOGD("bt16pair: StartBTConnection call at +0x%lx -> NOP", (unsigned long)off);
+    }
+}
+#endif
+
 } // namespace
 
 void bt16pair_pre_aap_create_session(void *cb_list)
 {
+#ifdef FW70_PORT
+    nop_bt_start_calls();
+#endif
     if (!cb_list) {
         LOGW("bt16pair_pre_aap_create_session: NULL cb_list, skipping");
         return;

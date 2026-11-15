@@ -916,6 +916,19 @@ static void nav16_emit_if_changed()
 
     uint8_t lane_codes[HUD_NAV16_MAX_LANES];
     nav16_encode_lane_codes(display.lanes, display.n_lanes, lane_codes);
+#ifdef FW70_PORT
+    {
+        char lanes[HUD_NAV16_MAX_LANES * 3 + 1];
+        int o = 0;
+        for (int i = 0; i < HUD_NAV16_MAX_LANES && o + 3 < (int)sizeof(lanes); ++i)
+            o += snprintf(lanes + o, sizeof(lanes) - o, "%02x ", lane_codes[i]);
+        lanes[o] = '\0';
+        LOGD("nav16 -> HUD: glyph=%u dist=%d unit=%u step_m=%d known=%d filtered=%d n_lanes=%u lanes=[%s] road=\"%s\"",
+             (unsigned)display.glyph, (int)display.dist_dec, (unsigned)display.dist_unit,
+             (int)g_nav16_step_meters, g_nav16_step_distance_known ? 1 : 0, filtered ? 1 : 0,
+             (unsigned)display.n_lanes, lanes, display.road);
+    }
+#endif
     g_tx->next_turn(display.road, display.glyph);
     g_tx->distance(display.dist_dec, display.dist_unit);
     g_tx->lanes(lane_codes);
@@ -930,7 +943,19 @@ static void nav16_emit_if_changed()
 // 0x8006 NavigationState -> maneuver glyph + road + lanes.
 static void nav16_on_guidance(const AaGuidance *g)
 {
-#if LOG_LEVEL <= LOG_LEVEL_VERBOSE
+#ifdef FW70_PORT
+    {
+        // Log each distinct guidance frame once (maneuver/exit/angle/lanes).
+        static char s_last[320];
+        char line[320];
+        hud_nav16_format_guidance(g, line, sizeof(line));
+        if (strcmp(line, s_last) != 0) {
+            LOGD("%s", line);
+            strncpy(s_last, line, sizeof(s_last) - 1);
+            s_last[sizeof(s_last) - 1] = '\0';
+        }
+    }
+#elif LOG_LEVEL <= LOG_LEVEL_VERBOSE
     char line[320];
     hud_nav16_format_guidance(g, line, sizeof(line));
     LOGV("%s", line);
@@ -981,6 +1006,20 @@ static void nav16_on_position(const AaPosition *p)
     char line[320]; hud_nav16_format_position(p, line, sizeof(line)); LOGV("%s", line);
 #endif
     if (!p->have_step) return;
+#ifdef FW70_PORT
+    {
+        // Log the raw phone figure whenever its unit or text changes.
+        static char s_last[64];
+        static uint32_t s_unit = 0xffffffffu;
+        if (p->step_units != s_unit || strcmp(p->step_display, s_last) != 0) {
+            LOGD("nav16 POS: step=%dm display=\"%s\" aa_unit=%u",
+                 p->step_meters, p->step_display, (unsigned)p->step_units);
+            s_unit = p->step_units;
+            strncpy(s_last, p->step_display, sizeof(s_last) - 1);
+            s_last[sizeof(s_last) - 1] = '\0';
+        }
+    }
+#endif
     uint8_t unit = aa_to_mazda_unit(p->step_units);
     if (unit > 5) unit = 0;                             // clamp untrusted unit
     g_nav16_acc.dist_unit = unit;
