@@ -550,6 +550,28 @@ void dump_distance(const DistanceHdr *h)
 }
 
 #ifdef FW70_PORT
+// FW70 blmjciaapa RaceAap::Init fills the aap_create_session callback table:
+// slot 0 OnErrorCb, 2 SessionStatusCb(void *user, AAP_SessionInfo *),
+// 3 StreamRequestCb, 4 ProjectionStatusCb, 5 AudioStateCb, 6 BtPairingReqCb,
+// 8 MediaPlaybackStatusCb, 9 PhoneStatusCb, 10 navigation (ours).
+// AAP_SessionInfo starts with the u32 state: 0x300 DISCONNECTED,
+// 0x301 CONNECTING, 0x302 CONNECTED (RaceAap::map_AAP_SessionStatus).
+constexpr int      kCbListSessionSlot   = 2;
+constexpr uint32_t kAapSessionDisconnected = 0x300;
+typedef void (*session_cb_fn)(void *user, void *info);
+session_cb_fn g_real_session_cb = nullptr;
+
+void our_session_cb(void *user, void *info)
+{
+    const uint32_t state = info ? *static_cast<const uint32_t *>(info) : 0;
+    LOGD("session status cb: state=0x%x", (unsigned)state);
+    if (state == kAapSessionDisconnected) {
+        LOGD("session disconnected — clearing HUD");
+        hud_tx_status(2);   // same path as NAV STOP: zero snapshot -> blank frame
+    }
+    if (g_real_session_cb) g_real_session_cb(user, info);
+}
+
 // fw70 diagnostic: with <cluster_type>IMAGE</cluster_type> the phone attaches
 // a maneuver icon (PNG) to every 0x501. While the debug flag exists, save each
 // distinct icon once to /tmp/oem-aa-mod-img/<hash>_e<event>_n<number>.png and
@@ -692,8 +714,11 @@ void our_nav_cb(void *user_ctx, void *hdr36)
             // Exit 4+ on non-standard roundabouts was seen at ~160 deg, so
             // only exits 1..3 map to right/straight/left; anything else
             // is shown as "straight through".
-            // User choice: exits 4+ are shown as a U-turn (360 deg).
-            t70.turn_angle = (n >= 1 && n <= 3) ? n * 90 : (n >= 4 ? 360 : 180);
+            // Exit 4 is shown as a U-turn (360 deg). On big multi-junction
+            // roundabouts Yandex counts every branch and sends 9..11 (logs9,
+            // pl. Gagarina: real exit was a left), so 5+ is meaningless:
+            // show the generic "through the roundabout" glyph (180).
+            t70.turn_angle = (n >= 1 && n <= 3) ? n * 90 : (n == 4 ? 360 : 180);
             LOGD("nav 0x501: roundabout without angle — exit=%d -> guessed angle=%d",
                  (int)n, (int)t70.turn_angle);
         }
@@ -789,6 +814,21 @@ void hud_pre_aap_create_session(void *cb_list)
     LOGD("hud_pre_aap_create_session: cb_list=%p slot[%d] %p -> %p (our_nav_cb)",
          cb_list, kCbListNavSlot, prev,
          reinterpret_cast<void *>(&our_nav_cb));
+
+#ifdef FW70_PORT
+    // Wrap RaceAap::SessionStatusCb (slot 2) so the HUD is cleared when the
+    // phone goes away. Over a wireless dongle jciAAPA never calls
+    // aap_destroy_session on unplug (logs9), so the sender's teardown clear
+    // never runs; the SDK does report AAP_SESSION_STATE_DISCONNECTED here.
+    // aap_create_session may be retried with the same table: never wrap twice.
+    if (slots[kCbListSessionSlot] != reinterpret_cast<void *>(&our_session_cb)) {
+        g_real_session_cb = reinterpret_cast<session_cb_fn>(slots[kCbListSessionSlot]);
+        slots[kCbListSessionSlot] = reinterpret_cast<void *>(&our_session_cb);
+        LOGD("hud_pre_aap_create_session: slot[%d] %p -> %p (our_session_cb)",
+             kCbListSessionSlot, reinterpret_cast<void *>(g_real_session_cb),
+             reinterpret_cast<void *>(&our_session_cb));
+    }
+#endif
 
     // Compile-time-ish guard against a future firmware that bumps
     // the table size. If kCbListUserSlot ever drifts past the end
