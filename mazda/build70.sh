@@ -27,3 +27,16 @@ done
 echo "LINK libpatch-blmjciaapa.so"
 $CXX $OBJS $LDFLAGS -Wl,-soname,libpatch-blmjciaapa.so -o $OUT/libpatch-blmjciaapa.so
 ls -la $OUT/libpatch-blmjciaapa.so
+
+# aap_service shim (GAL 1.6 negotiation + nav frame relay). FW70: navi module
+# only — the audio module depends on FW74-only addresses and is not built.
+OBJS2=""
+for src in patches/aap_service/main.cpp $(find patches/aap_service/navi -name '*.cpp' | sort); do
+  obj=$OUT/obj/$(echo ${src#patches/} | tr '/' '_' | sed 's/\.cpp$/.o/')
+  echo "CXX $src"
+  $CXX $CXXFLAGS -c "$src" -o "$obj"
+  OBJS2="$OBJS2 $obj"
+done
+echo "LINK libpatch-aap_service.so"
+$CXX $OBJS2 $LDFLAGS -Wl,-soname,libpatch-aap_service.so -o $OUT/libpatch-aap_service.so
+ls -la $OUT/libpatch-aap_service.so

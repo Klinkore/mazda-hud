@@ -33,7 +33,15 @@ namespace {
 //   [4] AudioStateCb       [9] PhoneStatusCb
 // Slot 18 is the user context the SDK passes as the 1st arg to every
 // callback (OEM leaves it NULL). Re-harvest after any OEM update.
+#ifdef FW70_PORT
+// FW70 RaceAap::Init (0x84f24) table: [0] OnErrorCb, [2] SessionStatusCb,
+// [3] StreamRequestCb, [4] ProjectionStatusCb(void*, int ev, data-in-r2),
+// [5] AudioStateCb, [6] BtPairingReqCb, [8] MediaPlaybackStatusCb,
+// [9] PhoneStatusCb, [10] nav (ours).
+constexpr int kCbListProjSlot = 4;
+#else
 constexpr int kCbListProjSlot = 3;
+#endif
 
 // AAP_ProjectionEventType values (RaceAap Enum2Str table):
 //   0x400 NONE, 0x401 ON, 0x402 OFF, 0x403 SETUP, 0x404 CONFIG.
@@ -285,7 +293,13 @@ int our_projection_status_cb(void *user, int ev, void *data)
     // Resolve the connection manager / device name / connect mode for both
     // the log and the SETUP gate below.
     void       *cm   = AapConnectionManager_instance();
+    #ifdef FW70_PORT
+    // Dev-name offset (+0x54) is unverified on FW70; never read it there
+    // (the bypass is armed for all devices on FW70 anyway).
+    const char *dev  = nullptr;
+#else
     const char *dev  = cm ? AapConnectionManager_dev_name(cm) : nullptr;
+#endif
     int         mode = cm ? AapConnectionManager_connect_mode(cm) : -1;
     bool        all_devices = libpatch_config::bt_pairing_bypass_all_devices();
     LOGV("bt16pair: proj cb: ev=0x%x user=%p data=%p v1_6=%d cm=%p "

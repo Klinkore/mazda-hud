@@ -94,6 +94,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>   // strcasecmp
+#include <unistd.h>    // access
 
 // Pin the subsystem tag for the inline logging below to "CONFIG",
 // independent of whatever LOG_TAG the including TU is using, so the
@@ -446,13 +447,22 @@ inline HudTransport hud_transport()  { return HUD_TRANSPORT_VBS; }
 inline bool         force_street_name() { return settings().force_street_name; }
 inline bool         hud_fold_latin() { return settings().hud_fold_latin; }
 inline uint32_t     hud_maneuver_max_distance_m() { return settings().hud_maneuver_max_distance_m; }
-inline bool         use_protocol_v1_6() { return false; }
+// fw70: GAL 1.6 is opt-in per unit via the flag file
+// /data_persist/oem-aa-mod/gal16 (written by the USB menu). Both the
+// aap_service shim and the blmjciaapa shim read the same flag.
+inline bool         use_protocol_v1_6() {
+    static int s = -1;
+    if (s < 0) s = (access("/data_persist/oem-aa-mod/gal16", F_OK) == 0) ? 1 : 0;
+    return s == 1;
+}
 inline bool         roundabout_prepend_exit_number() { return false; }
 inline bool         aa_audio_low_latency() { return false; }
 inline bool         mute_pauses_phone() { return false; }
 inline bool         unmute_starts_playback() { return false; }
 inline bool         block_headunit_media_play() { return false; }
-inline bool         bt_pairing_bypass_all_devices() { return false; }
+// fw70: the car always uses a wireless dongle (name unknown), so with 1.6 on
+// the pairing bypass is armed for every device.
+inline bool         bt_pairing_bypass_all_devices() { return use_protocol_v1_6(); }
 inline bool         bt_pairing_show_device_notification() { return false; }
 inline bool         compass_always_on() { return false; }
 

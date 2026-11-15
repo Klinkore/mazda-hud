@@ -287,12 +287,21 @@ uint8_t roundabout_glyph(int32_t exit_angle, bool clockwise)
 // absent angle as 0, which lands on the "back out the entry" glyph every time.
 int32_t exit_number_angle(int32_t exit_number)
 {
+#ifdef FW70_PORT
+    // Same rule as the FW70 1.5 path (user choice, logs9): 1..3 -> 90/180/270,
+    // 4 -> U-turn, anything else (Yandex sends 9..11 on big multi-junction
+    // roundabouts) -> generic "through" glyph.
+    if (exit_number >= 1 && exit_number <= 3) return exit_number * 90;
+    if (exit_number == 4) return 360;
+    return 180;
+#else
     static const int16_t kAngle[] = {180, 90, 180, 270, 270, 300, 300};
     if (exit_number < 0)
         exit_number = 0;
     if (exit_number > 6)
         exit_number = 6;
     return kAngle[exit_number];
+#endif
 }
 
 // The circulation angle to render for a roundabout: the sender's own angle when

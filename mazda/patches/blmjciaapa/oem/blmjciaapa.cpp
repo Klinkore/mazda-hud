@@ -68,7 +68,11 @@ constexpr uintptr_t AapConnectionManager_ActivateAapSession    = 0x0007325c;
 //     decompile calls "this+0x254"; it is NOT at +0x25c at runtime (that
 //     tail of the object is dead space). Re-verify after any OEM update.
 constexpr uintptr_t AapConnectionManager_DevName     = 0x54;   // char[]  USB device name
-constexpr uintptr_t AapConnectionManager_ConnectMode = 0xdc;   // int     0=idle 2=pending-pair 3=activated
+// FW70: AapConnectionManager::NotifyBtPairingResult (0x766e4) reads the mode
+// at this+0x254 (cmp #2 / #3), and its only caller passes
+// AapProc::GetAapConnectionManager() (= AapProc+0x98) as this. Unoptimised
+// code, so no subobject skew: +0x254 is the runtime offset on FW70.
+constexpr uintptr_t AapConnectionManager_ConnectMode = 0x254;  // int     0=idle 2=pending-pair 3=activated
 } // namespace off
 
 // Load bias of the already-mapped blmjciaapa.so: address of the

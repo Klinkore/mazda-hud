@@ -21,6 +21,22 @@
 
 namespace {
 
+#ifdef FW70_PORT
+// Firmware 70.00.100A /usr/bin/aap_service (non-PIE, has symbols):
+//   Controller::sendVersionRequest 0x140fd8 writes minor via mov r2,#3 @0x141088
+//   _ZTV24NavigationStatusEndpoint 0x1894e0, routeMessage slot @0x1894fc
+//   NavigationStatusEndpoint::routeMessage 0x149850
+//   shared_ptr<IoBuffer>::operator->() const 0x13d0f4
+//   IoBuffer::raw 0x13cc04, IoBuffer::size 0x13cc3c
+constexpr uintptr_t kVersionInsnAddr  = 0x00141088;
+constexpr uint32_t  kVersionInsnOld   = 0xe3a02003;
+constexpr uint32_t  kVersionInsnNew   = 0xe3a02006;
+constexpr uintptr_t kVtableSlotAddr   = 0x001894fc;
+constexpr uintptr_t kRouteMessageAddr = 0x00149850;
+constexpr uintptr_t kSharedPtrDeref   = 0x0013d0f4;
+constexpr uintptr_t kIoBufferRaw      = 0x0013cc04;
+constexpr uintptr_t kIoBufferSize     = 0x0013cc3c;
+#else
 // Firmware 74.00.324A /usr/bin/aap_service is a non-PIE executable.
 constexpr uintptr_t kVersionInsnAddr  = 0x00173eb4;
 constexpr uint32_t  kVersionInsnOld   = 0xe3a02005;
@@ -30,6 +46,7 @@ constexpr uintptr_t kRouteMessageAddr = 0x0017be10;
 constexpr uintptr_t kSharedPtrDeref   = 0x0016f810;
 constexpr uintptr_t kIoBufferRaw      = 0x0016f2f8;
 constexpr uintptr_t kIoBufferSize     = 0x0016f330;
+#endif
 
 typedef int      (*route_fn)(void *, uint32_t, uint32_t, const void *);
 typedef void *   (*sp_deref_fn)(const void *);
