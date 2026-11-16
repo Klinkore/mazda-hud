@@ -139,6 +139,7 @@ do_install()
     chmod 0644 "${DST}/libpatch-aap_service.so"
     same "${SRC}/libpatch-aap_service.so" "${DST}/libpatch-aap_service.so" || fail "aap_service shim verify failed"
     touch "${DST}/gal16"
+    if [ -f "${SRC}/btaddr" ]; then cp "${SRC}/btaddr" "${DST}/btaddr" && log "btaddr installed"; else rm -f "${DST}/btaddr"; log "no btaddr on USB"; fi
     log "GAL 1.6: shim installed, gal16 flag set"
   else
     rm -f "${DST}/gal16"
