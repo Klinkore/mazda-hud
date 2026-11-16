@@ -205,7 +205,8 @@ void show_detected_device_notification(const char *device_name)
 // OOB, NUMERIC, PASSKEY, PIN starting at 4).
 constexpr int kCbListBtPairSlot   = 6;
 constexpr int kBtPairMethodNumeric = 5;
-typedef void (*BtPairReqFn)(void *user, void *ev);
+// Return type unknown (mangled name has none): pass r0 through unchanged.
+typedef int (*BtPairReqFn)(void *user, void *ev);
 BtPairReqFn g_orig_btpair_cb = nullptr;
 void *g_cb_user = nullptr;          // user ctx the SDK passes to every callback
 
@@ -277,6 +278,94 @@ bool synth_bt_pairing_request()
     g_orig_btpair_cb(g_cb_user, ev);
     return true;
 }
+
+// Set by our slot-6 wrapper when the PHONE itself sends a pairing request
+// (wired at any GAL version, or wireless below 1.6). Reset per SETUP.
+volatile bool g_real_pair_seen = false;
+// Set once our replay went out for the current session.
+volatile bool g_replayed = false;
+
+int our_btpair_cb(void *user, void *ev)
+{
+    g_real_pair_seen = true;
+    LOGD("bt16pair: phone sent its own BT pairing request (addr=%.8s...) — stock flow",
+         ev ? static_cast<const char *>(ev) : "(null)");
+    return g_orig_btpair_cb ? g_orig_btpair_cb(user, ev) : 0;
+}
+
+bool have_phone_addr()
+{
+    char a[18];
+    return hf_phone_addr(a) || read_btaddr(a);
+}
+
+// Late binding: the session was activated without a phone address (BT not yet
+// connected). Watch for the HF connection for up to 5 min and replay the
+// pairing request once it appears, so calls/voice key still move into AA.
+void *late_bind_thread(void *arg)
+{
+    void *cm = arg;
+    LOGD("bt16pair: late-bind watcher started");
+    for (int i = 0; i < 150; ++i) {              // 150 x 2 s = 5 min
+        sleep(2);
+        if (AapConnectionManager_connect_mode(cm) != kConnModeActivated) {
+            LOGD("bt16pair: late-bind: session no longer active — stop");
+            return nullptr;
+        }
+        if (g_real_pair_seen || g_replayed) return nullptr;
+        if (have_phone_addr()) {
+            LOGD("bt16pair: late-bind: phone BT address available after ~%d s — replaying", (i + 1) * 2);
+            g_replayed = synth_bt_pairing_request();
+            return nullptr;
+        }
+    }
+    LOGD("bt16pair: late-bind: no phone BT address within 5 min — giving up");
+    return nullptr;
+}
+
+// FW70 / GAL 1.6 activation policy (session parked in connect-mode 2):
+//  1. up to 3 s: let the phone send its own pairing request (wired) — stock;
+//  2. up to 10 s more: wait for the phone's BT address (HF connection or the
+//     btaddr file), replay the pairing request, wait up to 5 s for activation;
+//  3. otherwise force ActivateAapSession and start the late-bind watcher.
+bool fw70_pair_or_activate(void *cm)
+{
+    const useconds_t kStep = 100000;
+    for (int k = 0; k < 30; ++k) {
+        if (g_real_pair_seen || AapConnectionManager_connect_mode(cm) == kConnModeActivated) {
+            LOGD("bt16pair: phone handled pairing itself (real=%d mode=%d) — not intervening",
+                 g_real_pair_seen ? 1 : 0, AapConnectionManager_connect_mode(cm));
+            return false;
+        }
+        usleep(kStep);
+    }
+    for (int k = 0; k < 100 && !have_phone_addr(); ++k) {
+        if (g_real_pair_seen || AapConnectionManager_connect_mode(cm) != kConnModePendingPair)
+            return false;
+        usleep(kStep);
+    }
+    if (synth_bt_pairing_request()) {
+        g_replayed = true;
+        for (int k = 0; k < 50; ++k) {
+            usleep(kStep);
+            if (AapConnectionManager_connect_mode(cm) == kConnModeActivated) {
+                LOGD("bt16pair: activated by the OEM pairing flow after ~%d ms", (k + 1) * 100);
+                return true;
+            }
+        }
+        LOGW("bt16pair: OEM pairing flow did not activate within 5 s (mode=%d)",
+             AapConnectionManager_connect_mode(cm));
+        if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) return true;
+    }
+    LOGD("bt16pair: forcing ActivateAapSession(cm=%p) without BT binding", cm);
+    AapConnectionManager_ActivateAapSession(cm);
+    LOGD("bt16pair: post-inject mode=%d", AapConnectionManager_connect_mode(cm));
+    if (!g_replayed) {
+        pthread_t t;
+        if (preload_thread_create(&t, late_bind_thread, cm) == 0) pthread_detach(t);
+    }
+    return true;
+}
 #endif
 
 void *activator_thread(void *)
@@ -311,27 +400,8 @@ void *activator_thread(void *)
         // would have run on pairing success.
         if (cm && mode == kConnModePendingPair) {
 #ifdef FW70_PORT
-            // Preferred: replay the in-band BT pairing request the phone skips
-            // at GAL 1.6, with the phone's BT address, through the OEM's own
-            // RaceAap::BtPairingReqCb. The HMI then binds the BT phone to the
-            // AA session exactly as at GAL 1.3 (calls + voice key go to AA) and
-            // activates the session via NotifyBtPairingResult.
-            if (synth_bt_pairing_request()) {
-                for (int k = 0; k < 50; ++k) {           // up to 5 s
-                    usleep(kStepUs);
-                    if (AapConnectionManager_connect_mode(cm) == kConnModeActivated) {
-                        LOGD("bt16pair: activated by the OEM pairing flow after ~%d ms",
-                             (k + 1) * 100);
-                        injected = true;
-                        break;
-                    }
-                }
-                if (injected) break;
-                LOGW("bt16pair: OEM pairing flow did not activate within 5 s "
-                     "(mode=%d) — falling back to ActivateAapSession",
-                     AapConnectionManager_connect_mode(cm));
-                if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) break;
-            }
+            injected = fw70_pair_or_activate(cm);
+            break;
 #endif
             LOGD("bt16pair: connect-mode==2 (pending-pair, dongle stuck) after "
                  "~%d ms — forcing ActivateAapSession(cm=%p)", i * 100, cm);
@@ -446,7 +516,10 @@ int our_projection_status_cb(void *user, int ev, void *data)
     LOGD("bt16pair: AAP_PROJECTION_SETUP on \"%s\" with use_protocol_v1_6 "
         "(mode=%d all_devices=%d) — arming BT-pairing bypass",
         dev ? dev : "(null)", mode, all_devices ? 1 : 0);
-        
+#ifdef FW70_PORT
+    g_real_pair_seen = false;
+    g_replayed       = false;
+#endif
     spawn_activator_once();
     return rc;
 }
@@ -526,11 +599,16 @@ void bt16pair_pre_aap_create_session(void *cb_list)
 #ifdef FW70_PORT
     nop_bt_start_calls();
     {
+        // Wrap slot 6 so a pairing request sent by the phone itself (wired)
+        // is seen and the bypass stays out of the way. Idempotent on retries.
         void **s6 = static_cast<void **>(cb_list);
-        if (s6[kCbListBtPairSlot] && !g_orig_btpair_cb) {
+        if (s6[kCbListBtPairSlot] &&
+            s6[kCbListBtPairSlot] != reinterpret_cast<void *>(&our_btpair_cb)) {
             g_orig_btpair_cb = reinterpret_cast<BtPairReqFn>(s6[kCbListBtPairSlot]);
-            LOGD("bt16pair: captured BtPairingReqCb slot[%d]=%p",
-                 kCbListBtPairSlot, s6[kCbListBtPairSlot]);
+            s6[kCbListBtPairSlot] = reinterpret_cast<void *>(&our_btpair_cb);
+            LOGD("bt16pair: slot[%d] %p -> %p (BtPairingReqCb wrapper)",
+                 kCbListBtPairSlot, reinterpret_cast<void *>(g_orig_btpair_cb),
+                 reinterpret_cast<void *>(&our_btpair_cb));
         }
     }
 #endif

@@ -199,16 +199,16 @@ do_install()
 }
 
 # --- Menu ---
-CUR="Test 10 (GAL 1.6 off)"
+CUR="Rollback (GAL 1.6 off)"
 [ -f "${DST}/gal16" ] && grep -q 'libpatch-aap_service' /jci/sm/sm.conf 2>/dev/null && CUR="GAL 1.6"
 grep -q 'libpatch-blmjciaapa' /jci/sm/sm.conf 2>/dev/null || CUR="not installed"
 
 killall -q jci-dialog
 /jci/tools/jci-dialog --3-button-dialog \
   --title="oem-aa-mod FW70" \
-  --text="Installed now: ${CUR}\n\nGAL 1.6 - install with GAL 1.6\nTest 10 - install without GAL 1.6\nLogs - collect logs, change nothing" \
+  --text="Installed now: ${CUR}\n\nGAL 1.6 - install with GAL 1.6\nRollback - emergency: GAL 1.3, no 1.6\nLogs - collect logs, change nothing" \
   --ok-label="GAL 1.6" \
-  --cancel-label="Test 10" \
+  --cancel-label="Rollback" \
   --button3-label="Logs"
 CHOICE=$?
 log "menu: choice=${CHOICE} (installed: ${CUR})"
