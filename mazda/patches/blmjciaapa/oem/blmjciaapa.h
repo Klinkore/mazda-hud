@@ -89,6 +89,7 @@ constexpr uint32_t kAAPKeyMediaPause = 0x7f;  // 127 KEYCODE_MEDIA_PAUSE
 //   RaceAap::SendKeyInput(AAP_KeyEvent*)     -> int (0 = ok)
 void *Singleton_AapProc_GetInstance(void);
 void *AapProc_GetVideoManager(void *self);
+void *AapProc_GetBluetooth(void *self);   // FW70: Bluetooth* (+0xc HF connected, +0x46 HF phone addr, reversed)
 void *AapProc_GetRaceAap(void *self);
 void *AapProc_GetAudioManager(void *self);
 int   VideoManager_IsAAVideoInFocus(void *self);

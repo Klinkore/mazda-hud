@@ -33,6 +33,8 @@ constexpr uintptr_t AapProc_GetRaceAap            = 0x00078890;
 constexpr uintptr_t AapProc_GetAudioManager       = 0x000788b8;
 //   _ZN7AapProc22GetAapConnectionManagerEv
 constexpr uintptr_t AapProc_GetAapConnectionManager = 0x0007ff54;
+// AapProc::GetBluetooth() (FW70 0x78868) -> Bluetooth*
+constexpr uintptr_t AapProc_GetBluetooth          = 0x00078868;
 //   _ZN12VideoManager16IsAAVideoInFocusEv
 constexpr uintptr_t VideoManager_IsAAVideoInFocus = 0x000abd78;
 //   _ZN12AudioManager16IsAAMediaInFocusEv
@@ -168,6 +170,7 @@ BLM_THUNK(void *, AapProc_GetVideoManager, (void *self), (self), nullptr)
 BLM_THUNK(void *, AapProc_GetRaceAap, (void *self), (self), nullptr)
 BLM_THUNK(void *, AapProc_GetAudioManager, (void *self), (self), nullptr)
 BLM_THUNK(void *, AapProc_GetAapConnectionManager, (void *self), (self), nullptr)
+BLM_THUNK(void *, AapProc_GetBluetooth, (void *self), (self), nullptr)
 BLM_THUNK(int,    VideoManager_IsAAVideoInFocus, (void *self), (self), 0)
 BLM_THUNK(int,    AudioManager_IsAAMediaInFocus, (void *self), (self), 0)
 BLM_THUNK(int,    AudioManager_IsAAMediaInPlaying, (void *self), (self), 0)

@@ -231,11 +231,35 @@ bool read_btaddr(char out[18])
     return true;
 }
 
+// Address of the phone the HMI reports as connected for hands-free calls
+// (Bluetooth::ReceiveBTHFCallStatus stores the flag at +0xc and the address at
+// +0x46). Bluetooth::RequestBTPairing compares ReverseBTAddress(addr from the
+// AA request) with +0x46, so the AA-order string is +0x46 read backwards.
+bool hf_phone_addr(char out[18])
+{
+    void *aap = Singleton_AapProc_GetInstance();
+    void *bt  = aap ? AapProc_GetBluetooth(aap) : nullptr;
+    if (!bt) return false;
+    const int connected = *reinterpret_cast<const int *>(static_cast<const char *>(bt) + 0xc);
+    const unsigned char *b = reinterpret_cast<const unsigned char *>(bt) + 0x46;
+    if (!connected || (b[0] | b[1] | b[2] | b[3] | b[4] | b[5]) == 0) return false;
+    snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", b[5], b[4], b[3], b[2], b[1], b[0]);
+    return true;
+}
+
 bool synth_bt_pairing_request()
 {
-    char addr[18];
-    if (!read_btaddr(addr)) {
-        LOGD("bt16pair: no valid btaddr file — cannot replay BT pairing request");
+    char addr[18], hf[18], file[18];
+    const bool have_hf   = hf_phone_addr(hf);
+    const bool have_file = read_btaddr(file);
+    LOGD("bt16pair: phone address: HF-connected=%s file=%s",
+         have_hf ? hf : "(none)", have_file ? file : "(none)");
+    if (have_hf && have_file && strcmp(hf, file) != 0)
+        LOGW("bt16pair: HF-connected address differs from btaddr file — using the file");
+    if (have_file)      memcpy(addr, file, sizeof(addr));
+    else if (have_hf)   memcpy(addr, hf, sizeof(addr));
+    else {
+        LOGD("bt16pair: no phone BT address (no HF connection, no btaddr file) — cannot replay");
         return false;
     }
     if (!g_orig_btpair_cb) {
@@ -448,10 +472,11 @@ void nop_bt_start_calls()
     s_done = true;
 
     {
-        char addr[18];
-        if (read_btaddr(addr)) {
-            LOGD("bt16pair: btaddr present — pairing request will be replayed, "
-                 "stock StartBTConnection kept");
+        // The phone address is normally taken from the HF connection at
+        // activation time (or the btaddr file), so the stock BT flow is kept
+        // unless the user explicitly asks for the old NOP via the "btnop" flag.
+        if (access("/data_persist/oem-aa-mod/btnop", F_OK) != 0) {
+            LOGD("bt16pair: pairing request will be replayed — stock StartBTConnection kept");
             return;
         }
     }
