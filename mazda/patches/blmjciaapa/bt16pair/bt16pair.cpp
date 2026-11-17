@@ -299,27 +299,51 @@ bool have_phone_addr()
     return hf_phone_addr(a) || read_btaddr(a);
 }
 
-// Late binding: the session was activated without a phone address (BT not yet
-// connected). Watch for the HF connection for up to 5 min and replay the
-// pairing request once it appears, so calls/voice key still move into AA.
-void *late_bind_thread(void *arg)
+// Bumped on every AAP_PROJECTION_SETUP so a watcher left over from an earlier
+// session stops instead of acting on the new one.
+volatile int g_session_gen = 0;
+
+// Parked watcher: the session stays in connect-mode 2 (stock Mazda UI stays on
+// screen) until the phone shows up. Replay the pairing request as soon as the
+// phone's hands-free connection appears, and retry with the btaddr file every
+// 30 s, for up to 5 min while still parked.
+void *parked_watch_thread(void *arg)
 {
     void *cm = arg;
-    LOGD("bt16pair: late-bind watcher started");
-    for (int i = 0; i < 150; ++i) {              // 150 x 2 s = 5 min
+    const int gen = g_session_gen;
+    LOGD("bt16pair: parked: waiting for the phone (no forced activation)");
+    for (int i = 1; i <= 150; ++i) {             // 150 x 2 s = 5 min
         sleep(2);
-        if (AapConnectionManager_connect_mode(cm) != kConnModeActivated) {
-            LOGD("bt16pair: late-bind: session no longer active — stop");
+        if (gen != g_session_gen) {
+            LOGD("bt16pair: parked: new session — stop");
             return nullptr;
         }
-        if (g_real_pair_seen || g_replayed) return nullptr;
-        if (have_phone_addr()) {
-            LOGD("bt16pair: late-bind: phone BT address available after ~%d s — replaying", (i + 1) * 2);
-            g_replayed = synth_bt_pairing_request();
+        const int mode = AapConnectionManager_connect_mode(cm);
+        if (mode == kConnModeActivated) {
+            LOGD("bt16pair: parked: activated after ~%d s", i * 2);
             return nullptr;
+        }
+        if (mode != kConnModePendingPair) {
+            LOGD("bt16pair: parked: session gone (mode=%d) — stop", mode);
+            return nullptr;
+        }
+        if (g_real_pair_seen) return nullptr;
+        char hf[18];
+        const bool hf_now = hf_phone_addr(hf);
+        if (hf_now || (i % 15) == 0) {
+            LOGD("bt16pair: parked: %s after ~%d s — replaying",
+                 hf_now ? "phone HF connected" : "periodic retry", i * 2);
+            g_replayed = synth_bt_pairing_request();
+            if (hf_now) {   // give the OEM flow 10 s before trying again
+                for (int k = 0; k < 5; ++k) {
+                    sleep(2);
+                    if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) break;
+                }
+                i += 5;
+            }
         }
     }
-    LOGD("bt16pair: late-bind: no phone BT address within 5 min — giving up");
+    LOGD("bt16pair: parked: no phone within 5 min — leaving the session parked");
     return nullptr;
 }
 
@@ -327,7 +351,7 @@ void *late_bind_thread(void *arg)
 //  1. up to 3 s: let the phone send its own pairing request (wired) — stock;
 //  2. up to 10 s more: wait for the phone's BT address (HF connection or the
 //     btaddr file), replay the pairing request, wait up to 5 s for activation;
-//  3. otherwise force ActivateAapSession and start the late-bind watcher.
+//  3. otherwise stay parked (no forced activation) and watch for the phone.
 bool fw70_pair_or_activate(void *cm)
 {
     const useconds_t kStep = 100000;
@@ -357,14 +381,19 @@ bool fw70_pair_or_activate(void *cm)
              AapConnectionManager_connect_mode(cm));
         if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) return true;
     }
-    LOGD("bt16pair: forcing ActivateAapSession(cm=%p) without BT binding", cm);
-    AapConnectionManager_ActivateAapSession(cm);
-    LOGD("bt16pair: post-inject mode=%d", AapConnectionManager_connect_mode(cm));
-    if (!g_replayed) {
-        pthread_t t;
-        if (preload_thread_create(&t, late_bind_thread, cm) == 0) pthread_detach(t);
+    // Never force-activate without the phone: the wireless adapter alone keeps
+    // an AA session open with its own "connect your phone" screen, and forcing
+    // it took over the whole display for minutes (test 15). Stay parked (stock
+    // Mazda UI) and watch for the phone. Old behaviour: flag file "forceact".
+    if (access("/data_persist/oem-aa-mod/forceact", F_OK) == 0) {
+        LOGD("bt16pair: forceact flag — forcing ActivateAapSession(cm=%p) without BT binding", cm);
+        AapConnectionManager_ActivateAapSession(cm);
+        LOGD("bt16pair: post-inject mode=%d", AapConnectionManager_connect_mode(cm));
+        return true;
     }
-    return true;
+    pthread_t t;
+    if (preload_thread_create(&t, parked_watch_thread, cm) == 0) pthread_detach(t);
+    return false;
 }
 #endif
 
@@ -519,6 +548,7 @@ int our_projection_status_cb(void *user, int ev, void *data)
 #ifdef FW70_PORT
     g_real_pair_seen = false;
     g_replayed       = false;
+    g_session_gen    = g_session_gen + 1;
 #endif
     spawn_activator_once();
     return rc;
