@@ -20,6 +20,7 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#include <time.h>
 
 #include <string>
 
@@ -212,9 +213,9 @@ void *g_cb_user = nullptr;          // user ctx the SDK passes to every callback
 
 // Phone BT address from /data_persist/oem-aa-mod/btaddr (installed from the
 // USB menu). Returns false if missing or not "XX:XX:XX:XX:XX:XX".
-bool read_btaddr(char out[18])
+bool read_addr_file(const char *path, char out[18])
 {
-    FILE *f = fopen("/data_persist/oem-aa-mod/btaddr", "r");
+    FILE *f = fopen(path, "r");
     if (!f) return false;
     char buf[64] = {0};
     const bool ok = fgets(buf, sizeof(buf), f) != nullptr;
@@ -231,6 +232,8 @@ bool read_btaddr(char out[18])
         if (out[i] >= 'a' && out[i] <= 'f') out[i] = static_cast<char>(out[i] - 'a' + 'A');
     return true;
 }
+
+bool read_btaddr(char out[18]) { return read_addr_file("/data_persist/oem-aa-mod/btaddr", out); }
 
 // Address of the phone the HMI reports as connected for hands-free calls
 // (Bluetooth::ReceiveBTHFCallStatus stores the flag at +0xc and the address at
@@ -270,39 +273,48 @@ int paired_phone_addrs(char out[][18], int max)
     return n;
 }
 
-// The only phone paired with the car, if there is exactly one.
-bool single_paired_addr(char out[18])
+// Address that activated a session last time (learned automatically, survives
+// reboots). Same format as the btaddr file.
+const char kLastPhonePath[] = "/data_persist/oem-aa-mod/lastphone";
+
+bool read_addr_file(const char *path, char out[18]);
+
+void save_last_phone(const char *addr)
 {
-    char list[7][18];
-    if (paired_phone_addrs(list, 7) != 1) return false;
-    memcpy(out, list[0], 18);
-    return true;
+    char cur[18];
+    if (read_addr_file(kLastPhonePath, cur) && strcmp(cur, addr) == 0) return;
+    FILE *f = fopen(kLastPhonePath, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", addr);
+    fclose(f);
+    sync();
+    LOGD("bt16pair: remembered %.8s... as the last working phone", addr);
 }
 
-bool synth_bt_pairing_request()
+// Candidate phone addresses, most likely first, without duplicates:
+// last working phone, btaddr file, HF-connected phone, every paired phone.
+int phone_candidates(char out[][18], int max, bool log)
 {
-    char addr[18], hf[18], file[18], list[7][18];
-    const bool have_hf   = hf_phone_addr(hf);
-    const bool have_file = read_btaddr(file);
-    const int  n_paired  = paired_phone_addrs(list, 7);
-    LOGD("bt16pair: phone address: HF-connected=%s file=%s paired=%d",
-         have_hf ? hf : "(none)", have_file ? file : "(none)", n_paired);
-    for (int i = 0; i < n_paired; ++i) {
-        const bool match = have_file && strcmp(list[i], file) == 0;
-        LOGD("bt16pair:   paired[%d] = %.8s...%s", i, list[i], match ? " (== btaddr file)" : "");
-    }
-    if (have_hf && have_file && strcmp(hf, file) != 0)
-        LOGW("bt16pair: HF-connected address differs from btaddr file — using the file");
-    if (have_file)          memcpy(addr, file, sizeof(addr));
-    else if (have_hf)       memcpy(addr, hf, sizeof(addr));
-    else if (n_paired == 1) {
-        memcpy(addr, list[0], sizeof(addr));
-        LOGD("bt16pair: using the only phone paired with the car");
-    } else {
-        LOGD("bt16pair: no phone BT address (no HF connection, no btaddr file, %d paired) — cannot replay",
-             n_paired);
-        return false;
-    }
+    char tmp[18], list[7][18];
+    int n = 0;
+    auto add = [&](const char *a, const char *src) {
+        for (int k = 0; k < n; ++k) if (strcmp(out[k], a) == 0) return;
+        if (n >= max) return;
+        memcpy(out[n], a, 18);
+        if (log) LOGD("bt16pair:   candidate[%d] %.8s... (%s)", n, a, src);
+        ++n;
+    };
+    if (read_addr_file(kLastPhonePath, tmp)) add(tmp, "last working");
+    if (read_btaddr(tmp))                    add(tmp, "btaddr file");
+    if (hf_phone_addr(tmp))                  add(tmp, "HF-connected");
+    const int np = paired_phone_addrs(list, 7);
+    for (int k = 0; k < np; ++k)             add(list[k], "paired with car");
+    if (log) LOGD("bt16pair: %d phone candidate(s), %d paired with the car", n, np);
+    return n;
+}
+
+bool synth_bt_pairing_request(const char *addr)
+{
     if (!g_orig_btpair_cb) {
         LOGW("bt16pair: BtPairingReqCb not captured — cannot replay");
         return false;
@@ -335,13 +347,43 @@ int our_btpair_cb(void *user, void *ev)
 
 bool have_phone_addr()
 {
-    char a[18];
-    return hf_phone_addr(a) || read_btaddr(a) || single_paired_addr(a);
+    char a[8][18];
+    return phone_candidates(a, 8, false) > 0;
 }
 
 // Bumped on every AAP_PROJECTION_SETUP so a watcher left over from an earlier
 // session stops instead of acting on the new one.
 volatile int g_session_gen = 0;
+
+// Replay the pairing request for each candidate in turn, giving the OEM flow
+// up to 5 s per phone. Only a phone that is actually here (BT on, AA running
+// through the adapter) activates the session; absent ones just time out. The
+// winner is remembered and tried first next time, so a new phone is learned
+// automatically once it is paired with the car.
+bool try_candidates(void *cm, int gen)
+{
+    char cand[8][18];
+    const int n = phone_candidates(cand, 8, true);
+    for (int c = 0; c < n; ++c) {
+        if (gen != g_session_gen || g_real_pair_seen ||
+            AapConnectionManager_connect_mode(cm) != kConnModePendingPair)
+            return AapConnectionManager_connect_mode(cm) == kConnModeActivated;
+        if (!synth_bt_pairing_request(cand[c])) return false;
+        g_replayed = true;
+        for (int k = 0; k < 50; ++k) {
+            usleep(100000);
+            const int mode = AapConnectionManager_connect_mode(cm);
+            if (mode == kConnModeActivated) {
+                LOGD("bt16pair: candidate[%d] activated the session after ~%d ms", c, (k + 1) * 100);
+                save_last_phone(cand[c]);
+                return true;
+            }
+            if (mode != kConnModePendingPair) return false;
+        }
+        LOGD("bt16pair: candidate[%d] %.8s... did not activate within 5 s", c, cand[c]);
+    }
+    return false;
+}
 
 // Parked watcher: the session stays in connect-mode 2 (stock Mazda UI stays on
 // screen) until the phone shows up. Replay the pairing request as soon as the
@@ -371,14 +413,13 @@ void *parked_watch_thread(void *arg)
         char hf[18];
         const bool hf_now = hf_phone_addr(hf);
         if (hf_now || (i % 15) == 0) {
-            LOGD("bt16pair: parked: %s after ~%d s — replaying",
+            LOGD("bt16pair: parked: %s after ~%d s — trying phones",
                  hf_now ? "phone HF connected" : "periodic retry", i * 2);
-            g_replayed = synth_bt_pairing_request();
-            if (hf_now) {   // give the OEM flow 10 s before trying again
-                for (int k = 0; k < 5; ++k) {
-                    sleep(2);
-                    if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) break;
-                }
+            const time_t t0 = time(nullptr);
+            if (try_candidates(cm, gen)) return nullptr;
+            i += static_cast<int>((time(nullptr) - t0) / 2);
+            if (hf_now) {   // don't loop on a stuck HF flag: wait 10 s
+                sleep(10);
                 i += 5;
             }
         }
@@ -408,19 +449,9 @@ bool fw70_pair_or_activate(void *cm)
             return false;
         usleep(kStep);
     }
-    if (synth_bt_pairing_request()) {
-        g_replayed = true;
-        for (int k = 0; k < 50; ++k) {
-            usleep(kStep);
-            if (AapConnectionManager_connect_mode(cm) == kConnModeActivated) {
-                LOGD("bt16pair: activated by the OEM pairing flow after ~%d ms", (k + 1) * 100);
-                return true;
-            }
-        }
-        LOGW("bt16pair: OEM pairing flow did not activate within 5 s (mode=%d)",
-             AapConnectionManager_connect_mode(cm));
-        if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) return true;
-    }
+    if (try_candidates(cm, g_session_gen)) return true;
+    if (AapConnectionManager_connect_mode(cm) != kConnModePendingPair) return true;
+    LOGW("bt16pair: no candidate phone activated the session — phone not here?");
     // Never force-activate without the phone: the wireless adapter alone keeps
     // an AA session open with its own "connect your phone" screen, and forcing
     // it took over the whole display for minutes (test 15). Stay parked (stock
