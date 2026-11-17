@@ -248,19 +248,59 @@ bool hf_phone_addr(char out[18])
     return true;
 }
 
+// Phones paired with the car, as cached by Bluetooth::GetPairedDevList
+// (DM_GetAllByType + DEV_GetBdAddr): count u32 at +0x4c (max 7), entries
+// 6 bytes each at +0x1c, stored reversed like +0x46 (IsAlreadyPaired 0x81000).
+// The +0x46 HF address above is only filled while the HMI reports a hands-free
+// call (ReceiveBTHFCallStatus), so it is empty at session start (test 15).
+// Returns the number of entries written to out (AA-order strings).
+int paired_phone_addrs(char out[][18], int max)
+{
+    void *aap = Singleton_AapProc_GetInstance();
+    void *bt  = aap ? AapProc_GetBluetooth(aap) : nullptr;
+    if (!bt) return 0;
+    const unsigned cnt = *reinterpret_cast<const unsigned *>(static_cast<const char *>(bt) + 0x4c);
+    if (cnt > 7) return 0;
+    int n = 0;
+    for (unsigned i = 0; i < cnt && n < max; ++i) {
+        const unsigned char *b = reinterpret_cast<const unsigned char *>(bt) + 0x1c + 6 * i;
+        if ((b[0] | b[1] | b[2] | b[3] | b[4] | b[5]) == 0) continue;
+        snprintf(out[n++], 18, "%02X:%02X:%02X:%02X:%02X:%02X", b[5], b[4], b[3], b[2], b[1], b[0]);
+    }
+    return n;
+}
+
+// The only phone paired with the car, if there is exactly one.
+bool single_paired_addr(char out[18])
+{
+    char list[7][18];
+    if (paired_phone_addrs(list, 7) != 1) return false;
+    memcpy(out, list[0], 18);
+    return true;
+}
+
 bool synth_bt_pairing_request()
 {
-    char addr[18], hf[18], file[18];
+    char addr[18], hf[18], file[18], list[7][18];
     const bool have_hf   = hf_phone_addr(hf);
     const bool have_file = read_btaddr(file);
-    LOGD("bt16pair: phone address: HF-connected=%s file=%s",
-         have_hf ? hf : "(none)", have_file ? file : "(none)");
+    const int  n_paired  = paired_phone_addrs(list, 7);
+    LOGD("bt16pair: phone address: HF-connected=%s file=%s paired=%d",
+         have_hf ? hf : "(none)", have_file ? file : "(none)", n_paired);
+    for (int i = 0; i < n_paired; ++i) {
+        const bool match = have_file && strcmp(list[i], file) == 0;
+        LOGD("bt16pair:   paired[%d] = %.8s...%s", i, list[i], match ? " (== btaddr file)" : "");
+    }
     if (have_hf && have_file && strcmp(hf, file) != 0)
         LOGW("bt16pair: HF-connected address differs from btaddr file — using the file");
-    if (have_file)      memcpy(addr, file, sizeof(addr));
-    else if (have_hf)   memcpy(addr, hf, sizeof(addr));
-    else {
-        LOGD("bt16pair: no phone BT address (no HF connection, no btaddr file) — cannot replay");
+    if (have_file)          memcpy(addr, file, sizeof(addr));
+    else if (have_hf)       memcpy(addr, hf, sizeof(addr));
+    else if (n_paired == 1) {
+        memcpy(addr, list[0], sizeof(addr));
+        LOGD("bt16pair: using the only phone paired with the car");
+    } else {
+        LOGD("bt16pair: no phone BT address (no HF connection, no btaddr file, %d paired) — cannot replay",
+             n_paired);
         return false;
     }
     if (!g_orig_btpair_cb) {
@@ -296,7 +336,7 @@ int our_btpair_cb(void *user, void *ev)
 bool have_phone_addr()
 {
     char a[18];
-    return hf_phone_addr(a) || read_btaddr(a);
+    return hf_phone_addr(a) || read_btaddr(a) || single_paired_addr(a);
 }
 
 // Bumped on every AAP_PROJECTION_SETUP so a watcher left over from an earlier
