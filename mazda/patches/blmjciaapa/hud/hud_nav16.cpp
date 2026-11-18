@@ -330,13 +330,22 @@ static const char *hud_nav16_maneuver_name(uint32_t t)
 uint8_t hud_nav16_glyph(const AaGuidance *g)
 {
     if (!g) return HUD_BLANK;
+    // Last roundabout glyph: Google Maps follows an ENTER_AND_EXIT step with a
+    // separate step of a type newer than our enum (46 seen in logs16, right
+    // after RA_ENTER_EXIT_CCW_ANGLE on the same road — the "exit the roundabout"
+    // leg). Keep showing the roundabout arrow for it instead of a blank sign.
+    static uint8_t s_last_ra = 0;
     switch (g->maneuver_type) {
         case 32: case 33:  // RA_ENTER_EXIT_CW (clockwise = left-hand traffic)
-            return roundabout_glyph(roundabout_angle(g), /*clockwise=*/true);
+            return s_last_ra = roundabout_glyph(roundabout_angle(g), /*clockwise=*/true);
         case 34: case 35:  // RA_ENTER_EXIT_CCW (counterclockwise = right-hand traffic)
-            return roundabout_glyph(roundabout_angle(g), /*clockwise=*/false);
+            return s_last_ra = roundabout_glyph(roundabout_angle(g), /*clockwise=*/false);
         default:
-            return (g->maneuver_type < 43) ? kManeuverGlyph[g->maneuver_type] : HUD_EMPTY;
+            if (g->maneuver_type < 43) {
+                s_last_ra = 0;
+                return kManeuverGlyph[g->maneuver_type];
+            }
+            return s_last_ra ? s_last_ra : HUD_EMPTY;
     }
 }
 
