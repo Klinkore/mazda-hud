@@ -73,7 +73,14 @@ constexpr const char *kBusName = "com.jci.aapa.hud";
 // Empty-slot sentinel for VBS_NAVI_SetRecommLaneReq's (ay) lane array: the OEM
 // method hides a slot with this byte on the wire. VBS-only — the canonical
 // snapshot hidden value is OEM_LANE_NONE (0); we remap 0 -> this at emit.
+#ifdef FW70_PORT
+// FW70 svcjcinavi (thUpdateGuidanceChangeToHUD / NAVI_SendHUDGuidaceDataToVBS
+// 0x58144) sends every slot as g_arrLaneInfoMapping[code], so an empty slot is
+// glyph 0 — never 0xFF. With 0xFF the FW70 HUD showed no lanes at all (logs16).
+constexpr uint8_t kVbsLaneHidden = 0x00;
+#else
 constexpr uint8_t kVbsLaneHidden = 0xFF;
+#endif
 
 // map_distance_unit() (distance-unit enum) comes from hud_nav.h, shared with
 // the svcnavi transport. The turn-icon mapping (kTurnIcons / compute_turn_icon)
@@ -276,7 +283,7 @@ void send_one(const NaviSnapshot &cur,
         const uint32_t lane_count = sizeof(wire);
         int rc = VBS_NAVI_SetRecommLaneReq(g_conn, &lane_data, &lane_count,
                                            nullptr, nullptr);
-        LOGV("hud_send: SetRecommLaneReq sync=%u [%u %u %u %u %u %u %u %u] rc=%d",
+        LOGD("hud_send: SetRecommLaneReq sync=%u [%u %u %u %u %u %u %u %u] rc=%d",
              static_cast<unsigned>(sync_bit),
              wire[0], wire[1], wire[2], wire[3],
              wire[4], wire[5], wire[6], wire[7], rc);
